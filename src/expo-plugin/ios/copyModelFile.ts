@@ -6,13 +6,14 @@ import type { ConfigProps } from '../@types';
 
 export const withIosModelFile: ConfigPlugin<ConfigProps> = (
   c,
-  { modelName }
+  { modelName, modelDir }
 ) => {
   return withXcodeProject(c, (config) => {
     config.modResults = setModelFile({
       projectRoot: config.modRequest.projectRoot,
       project: config.modResults,
       modelName,
+      modelDir,
     });
     return config;
   });
@@ -22,16 +23,22 @@ export function setModelFile({
   projectRoot,
   project,
   modelName,
+  modelDir,
 }: {
   project: XcodeProject;
   projectRoot: string;
   modelName: string;
+  modelDir?: string;
 }): XcodeProject {
-  const modelFilePath = path.resolve(projectRoot, `${modelName}`);
+  const modelFilePath = path.resolve(
+    projectRoot,
+    modelDir || '',
+    `${modelName}`
+  );
 
   if (!fs.existsSync(modelFilePath)) {
     throw new Error(
-      `Model file doesn't exist at ${modelFilePath}. Place it in your project root or configure a different path.`
+      `Model file doesn't exist at ${modelFilePath}. Place it in your project root or configure a different path using the 'modelDir' option.`
     );
   }
 

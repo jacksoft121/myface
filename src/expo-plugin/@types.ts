@@ -8,4 +8,12 @@ export type ConfigProps = {
    * This specifies which face recognition model should be loaded.
    */
   modelName: string;
+  /**
+   * Optional directory path where model files are located, relative to project root.
+   * If not specified, defaults to the project root directory.
+   *
+   * @example 'assets/models' - looks for models in <project-root>/assets/models/<modelName>
+   * @default undefined (uses project root)
+   */
+  modelDir?: string;
 };
