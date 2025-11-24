@@ -86,7 +86,8 @@ values={[
       [
         "react-native-nitro-inspire-face",
         {
-          "modelName": "Pikachu" // or "Megatron"
+          "modelName": "Pikachu", // or "Megatron"
+          "modelDir": "assets/models" // can be undefined, defaults to project dir
         }
       ]
     ]
@@ -94,7 +95,7 @@ values={[
 }
 ```
 
-2. Place the model package in your project's root directory.
+2. Place the model package in your project's root directory (or in the custom directory specified by `modelDir`).
 
 3. Run the command to copy the model package into both the iOS and Android platforms.
 

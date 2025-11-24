@@ -10,7 +10,7 @@ import type { ConfigProps } from '../@types';
  */
 export const withCopyAndroidModelFile: ConfigPlugin<ConfigProps> = (
   c,
-  { modelName }
+  { modelName, modelDir }
 ) => {
   return withDangerousMod(c, [
     'android',
@@ -18,13 +18,17 @@ export const withCopyAndroidModelFile: ConfigPlugin<ConfigProps> = (
       const projectRoot = config.modRequest.projectRoot;
       const platformProjectRoot = config.modRequest.platformProjectRoot;
 
-      const modelFilePath = path.resolve(projectRoot, `${modelName}`);
+      const modelFilePath = path.resolve(
+        projectRoot,
+        modelDir || '',
+        `${modelName}`
+      );
       const destDir = path.resolve(platformProjectRoot, 'app/src/main/assets');
       const destinationPath = path.join(destDir, modelName);
 
       if (!fs.existsSync(modelFilePath)) {
         throw new Error(
-          `Model file doesn't exist at ${modelFilePath}. Place it in your project root or configure a different path.`
+          `Model file doesn't exist at ${modelFilePath}. Place it in your project root or configure a different path using the 'modelDir' option.`
         );
       }
 
