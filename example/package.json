@@ -12,7 +12,11 @@
   "dependencies": {
     "react": "19.0.0",
     "react-native": "0.78.1",
-    "react-native-nitro-modules": "^0.26.4"
+    "react-native-fs": "^2.20.0",
+    "react-native-image-picker": "^7.1.2",
+    "react-native-mmkv": "^3.0.0",
+    "react-native-nitro-modules": "^0.26.4",
+    "react-native-vision-camera": "^4.3.2"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
