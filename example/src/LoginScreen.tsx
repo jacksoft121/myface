@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,41 +11,56 @@ import {
   ScrollView,
   ImageBackground,
 } from 'react-native';
+import { MMKV } from 'react-native-mmkv';
+import { config } from './config';
 
 interface LoginScreenProps {
   onLoginSuccess: (userData: any) => void;
 }
 
-// Placeholder for apiFind function
-const apiFind = async (endpoint: string, params: any) => {
-  return new Promise((resolve, reject) => {
-    setTimeout(() => {
-      if (endpoint === 'tecloginbyphone') {
-        if (params.I_VCPHONE === '12345678900' && params.I_VCPWD === 'password') {
-          resolve({
-            data1: [{
-              o_issuc: '1',
-              o_msg: '登录成功',
-              VCNAMECUST: '示例机构',
-              VCPHONE: params.I_VCPHONE,
-              ID: 'user123',
-              IDORG: 'org456',
-            }],
-          });
-        } else {
-          resolve({
-            data1: [{
-              o_issuc: '0',
-              o_msg: '手机号或密码错误',
-            }],
-          });
-        }
-      } else {
-        reject(new Error('未知接口'));
-      }
-    }, 1000);
-  });
+const storage = new MMKV({
+  id: 'login-credentials',
+});
+
+const STORAGE_KEYS = {
+  REMEMBER_ME: 'remember_me',
+  USER_PHONE: 'user_phone',
+  USER_PASSWORD: 'user_password',
+  CURRENT_USER: 'current_user',
 };
+
+const apiFind = async (func: string, params: Record<string, any>) => {
+  const baseUrl = `${config.baseUrl}?func=${func}`;
+
+  const formData = new FormData();
+  for (const key in params) {
+    if (Object.prototype.hasOwnProperty.call(params, key)) {
+      formData.append(key, params[key]);
+    }
+  }
+
+  console.log('POST Request Body:', formData);
+
+  try {
+    const response = await fetch(baseUrl, {
+      method: 'POST',
+      body: formData,
+    });
+    console.log('API Response:', response);
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+    console.log('API Response:', JSON.stringify(result, null, 2));
+    return result;
+  } catch (error) {
+    console.error('API request failed:', error);
+    throw error;
+  }
+};
+
 
 const { width, height } = Dimensions.get('window');
 const rpx = (px: number) => (width / 750) * px;
@@ -53,6 +68,41 @@ const rpx = (px: number) => (width / 750) * px;
 const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
   const [phone, setPhone] = useState('');
   const [codeChecked, setCodeChecked] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
+
+  useEffect(() => {
+    const loadSavedCredentials = () => {
+      try {
+        const savedRememberMe = storage.getBoolean(STORAGE_KEYS.REMEMBER_ME);
+        if (savedRememberMe) {
+          setRememberMe(true);
+          const savedPhone = storage.getString(STORAGE_KEYS.USER_PHONE);
+          const savedPassword = storage.getString(STORAGE_KEYS.USER_PASSWORD);
+
+          if (savedPhone) setPhone(savedPhone);
+          if (savedPassword) setCodeChecked(savedPassword);
+        }
+      } catch (error) {
+        console.error('加载保存的登录信息失败:', error);
+      }
+    };
+
+    loadSavedCredentials();
+  }, []);
+
+  const processLogin = (userData: any) => {
+    if (rememberMe) {
+      storage.set(STORAGE_KEYS.REMEMBER_ME, true);
+      storage.set(STORAGE_KEYS.USER_PHONE, phone);
+      storage.set(STORAGE_KEYS.USER_PASSWORD, codeChecked);
+    } else {
+      storage.delete(STORAGE_KEYS.REMEMBER_ME);
+      storage.delete(STORAGE_KEYS.USER_PHONE);
+      storage.delete(STORAGE_KEYS.USER_PASSWORD);
+    }
+    storage.set(STORAGE_KEYS.CURRENT_USER, JSON.stringify(userData));
+    onLoginSuccess(userData);
+  };
 
   const handleLogin = async () => {
     if (!phone || !codeChecked) {
@@ -63,14 +113,29 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     try {
       const response: any = await apiFind('tecloginbyphone', {
         funcapi: 'tecloginbyphone',
+        procedure: '',
         I_VCPHONE: phone,
         I_VCPWD: codeChecked,
+        g_vcnameprefix: 'szstg',
       });
 
-      if (response.data1 && response.data1[0].o_issuc === '1') {
-        onLoginSuccess(response.data1[0]);
+      const resultSet = response?.data?.['#result-set-1'];
+
+      if (resultSet && resultSet.length > 0) {
+        if (resultSet[0].o_issuc === '0') {
+          Alert.alert('登录失败', resultSet[0].o_msg || '没有此用户或用户名密码错误');
+        } else if (resultSet.length === 1) {
+          processLogin(resultSet[0]);
+        } else {
+          const options = resultSet.map((org: any) => ({
+            text: `${org.VCNAMECUST}(${org.VCPHONE})`,
+            onPress: () => processLogin(org),
+          }));
+          options.push({ text: '取消', style: 'cancel' });
+          Alert.alert('请选择您要登录的机构', '', options);
+        }
       } else {
-        Alert.alert('登录失败', response.data1 ? response.data1[0].o_msg : '未知错误');
+        Alert.alert('登录失败', '没有找到此用户');
       }
     } catch (error) {
       console.error('登录请求失败:', error);
@@ -78,10 +143,13 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     }
   };
 
+  const toggleRememberMe = () => {
+    setRememberMe(!rememberMe);
+  };
+
   return (
     <ImageBackground source={require('./static/icon/logbg.png')} style={styles.fullBackground}>
       <ScrollView contentContainerStyle={styles.scrollViewContainer}>
-        {/* Decorative Images from login.vue, layered as requested */}
         <Image source={require('./static/icon/xian.png')} style={styles.img3} />
         <Image source={require('./static/icon/tencher.png')} style={styles.img2} />
         <Image source={require('./static/icon/logo_szstg.png')} style={styles.img1} />
@@ -96,9 +164,35 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
         <View style={styles.bottomSection}>
           <View style={styles.form}>
             <Text style={styles.inputText}>请输入账号</Text>
-            <TextInput style={styles.input} value={phone} onChangeText={setPhone} />
+            <TextInput
+              style={styles.input}
+              value={phone}
+              onChangeText={setPhone}
+              placeholder="请输入手机号"
+              placeholderTextColor="#B8B8D2"
+            />
             <Text style={styles.inputText}>请输入密码</Text>
-            <TextInput style={styles.input} value={codeChecked} onChangeText={setCodeChecked} secureTextEntry />
+            <TextInput
+              style={styles.input}
+              value={codeChecked}
+              onChangeText={setCodeChecked}
+              secureTextEntry
+              placeholder="请输入密码"
+              placeholderTextColor="#B8B8D2"
+            />
+
+            <View style={styles.rememberMeContainer}>
+              <TouchableOpacity
+                style={styles.checkboxContainer}
+                onPress={toggleRememberMe}
+              >
+                <View style={[styles.checkbox, rememberMe && styles.checkboxChecked]}>
+                  {rememberMe && <Text style={styles.checkmark}>✓</Text>}
+                </View>
+                <Text style={styles.rememberMeText}>记住密码</Text>
+              </TouchableOpacity>
+            </View>
+
             <TouchableOpacity style={styles.loginButton} onPress={handleLogin}>
               <Text style={styles.loginButtonText}>登 录</Text>
             </TouchableOpacity>
@@ -128,14 +222,14 @@ const styles = StyleSheet.create({
   prodName: {
     fontSize: rpx(56),
     fontWeight: '500',
-    color: '#333', // Adjust color for visibility on background
+    color: '#333',
   },
   subtitle: {
     fontSize: rpx(28),
     fontWeight: '400',
-    color: '#555', // Adjust color for visibility
+    color: '#555',
   },
-  img1: { // logo
+  img1: {
     width: rpx(136),
     height: rpx(136),
     position: 'absolute',
@@ -143,7 +237,7 @@ const styles = StyleSheet.create({
     left: rpx(60),
     zIndex: 2,
   },
-  img2: { // tencher.png
+  img2: {
     width: rpx(452),
     height: rpx(400),
     position: 'absolute',
@@ -151,7 +245,7 @@ const styles = StyleSheet.create({
     left: rpx(150),
     zIndex: 1,
   },
-  img3: { // xian.png
+  img3: {
     width: rpx(560),
     height: rpx(464),
     position: 'absolute',
@@ -159,7 +253,7 @@ const styles = StyleSheet.create({
     left: rpx(60),
     zIndex: 0,
   },
-  img4: { // left circle
+  img4: {
     position: 'absolute',
     top: rpx(468),
     left: rpx(-150),
@@ -171,7 +265,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(172, 238, 221, 0.7)',
     zIndex: 0,
   },
-  img5: { // right circle
+  img5: {
     position: 'absolute',
     top: rpx(630),
     right: rpx(-150),
@@ -188,10 +282,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: rpx(80),
     borderTopRightRadius: rpx(80),
-    borderRadius: rpx(80),
-    paddingBottom: rpx(60),
+    paddingBottom: rpx(110),
     position: 'absolute',
-    bottom: rpx(300),
+    bottom: 0,
   },
   form: {
     paddingHorizontal: rpx(25),
@@ -215,6 +308,39 @@ const styles = StyleSheet.create({
     height: rpx(80),
     borderRadius: rpx(20),
     alignSelf: 'center',
+  },
+  rememberMeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: rpx(20),
+    marginLeft: rpx(15),
+  },
+  checkboxContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  checkbox: {
+    width: rpx(40),
+    height: rpx(40),
+    borderWidth: 2,
+    borderColor: '#B8B8D2',
+    borderRadius: rpx(6),
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: rpx(10),
+  },
+  checkboxChecked: {
+    backgroundColor: '#2fd9b1',
+    borderColor: '#2fd9b1',
+  },
+  checkmark: {
+    color: '#FFFFFF',
+    fontSize: rpx(24),
+    fontWeight: 'bold',
+  },
+  rememberMeText: {
+    fontSize: rpx(28),
+    color: '#858597',
   },
   loginButton: {
     width: '90%',
