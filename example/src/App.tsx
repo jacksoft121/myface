@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -23,6 +23,7 @@ import { Camera, useCameraDevices, CameraPermissionStatus } from 'react-native-v
 import { launchImageLibrary } from 'react-native-image-picker';
 import { MMKV } from 'react-native-mmkv';
 import RNFS from 'react-native-fs';
+import LoginScreen from './LoginScreen'; // 引入登录页面
 
 // 初始化 MMKV
 const storage = new MMKV({
@@ -58,7 +59,7 @@ const { width: screenWidth } = Dimensions.get('window');
 const PREVIEW_WIDTH = screenWidth - 40;
 const PREVIEW_HEIGHT = 300;
 
-export default function App() {
+const MainApp = () => {
   const [activeTab, setActiveTab] = useState('photoRegister');
   const [name, setName] = useState('');
   const [registeredFaces, setRegisteredFaces] = useState<FaceData[]>([]);
@@ -418,6 +419,22 @@ export default function App() {
       <ScrollView style={styles.content}>{renderTabContent()}</ScrollView>
     </View>
   );
+}
+
+export default function App() {
+  const [isLoggedIn, setLoggedIn] = useState(false);
+  const [userData, setUserData] = useState(null);
+
+  const handleLoginSuccess = (data: any) => {
+    setUserData(data);
+    setLoggedIn(true);
+  };
+
+  if (!isLoggedIn) {
+    return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
+  }
+
+  return <MainApp />;
 }
 
 const styles = StyleSheet.create({
