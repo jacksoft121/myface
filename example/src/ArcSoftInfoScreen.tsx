@@ -110,6 +110,7 @@ const ArcSoftInfoScreen = () => {
     session: InspireFaceSession
   ): Promise<ArrayBuffer | null> => {
     if (!imageUrl || !session) {
+      console.warn(`[特征提取] URL或会话无效: URL=${imageUrl}, Session=${session}`);
       return null;
     }
     const tempFilePath = `${
@@ -118,28 +119,34 @@ const ArcSoftInfoScreen = () => {
     let bitmap = null;
     let imageStream = null;
     try {
+      console.log(`[特征提取] 1/5: 开始下载图片: ${imageUrl}`);
       const download = await RNFS.downloadFile({
         fromUrl: imageUrl,
         toFile: tempFilePath,
       }).promise;
       if (download.statusCode !== 200) {
-        console.error(`下载图片失败: ${imageUrl}, 状态码: ${download.statusCode}`);
+        console.error(`[特征提取] 1/5: 下载图片失败: ${imageUrl}, 状态码: ${download.statusCode}`);
         return null;
       }
+      console.log(`[特征提取] 2/5: 图片下载成功到: ${tempFilePath}`);
+
       bitmap = InspireFace.createImageBitmapFromFilePath(3, tempFilePath);
       imageStream = InspireFace.createImageStreamFromBitmap(
         bitmap,
         CameraRotation.ROTATION_0
       );
       imageStream.setFormat(ImageFormat.BGR);
+      console.log(`[特征提取] 3/5: 位图和图像流创建成功`);
+
       const faceInfos = session.executeFaceTrack(imageStream);
       if (faceInfos.length > 0 && faceInfos[0]) {
+        console.log(`[特征提取] 4/5: 检测到人脸，开始提取特征`);
         return session.extractFaceFeature(imageStream, faceInfos[0].token);
       }
-      console.log(`在图片中未检测到人脸: ${imageUrl}`);
+      console.log(`[特征提取] 4/5: 在图片中未检测到人脸: ${imageUrl}`);
       return null;
     } catch (error) {
-      console.error(`处理图片时出错 ${imageUrl}:`, error);
+      console.error(`[特征提取] 5/5: 处理图片时出错 ${imageUrl}:`, error);
       return null;
     } finally {
       imageStream?.dispose();
@@ -147,6 +154,7 @@ const ArcSoftInfoScreen = () => {
       RNFS.unlink(tempFilePath).catch((err) =>
         console.error('删除临时文件失败', err)
       );
+      console.log(`[特征提取] 5/5: 资源已清理 for ${imageUrl}`);
     }
   };
 
@@ -159,7 +167,7 @@ const ArcSoftInfoScreen = () => {
   }, []);
 
   const findStudentImg = useCallback(
-    async (currentVer: number, localUserNames: string[]) => {
+    async (currentVer: number) => {
       if (!sessionRef.current || !selectedCampus) {
         showToast('人脸识别会话或校区未初始化');
         return;
@@ -175,43 +183,36 @@ const ArcSoftInfoScreen = () => {
         const newVersionStr = res.data?.['#result-set-2']?.[0]?.DTVER;
         const toRegister = res.data?.['#result-set-3'] || [];
 
-        if (currentVer === 0) {
-          const studentUserNames = localUserNames.filter(
-            (name) => !name.includes('_T_')
-          );
-          for (const name of studentUserNames) {
-            const hubId = faceIdMappingStorage.getNumber(name);
-            if (hubId) {
-              await InspireFace.featureHubFaceRemove(hubId);
-              faceIdMappingStorage.delete(name);
-              userInfoCacheStorage.delete(name);
-            }
-          }
-        } else {
-          for (const student of toDelete) {
-            const userName = `${student.ID}_${student.VCNAME}`;
-            const hubId = faceIdMappingStorage.getNumber(userName);
-            if (hubId) {
-              await InspireFace.featureHubFaceRemove(hubId);
-              faceIdMappingStorage.delete(userName);
-              userInfoCacheStorage.delete(userName);
-            }
+        // 增量删除
+        for (const student of toDelete) {
+          const userName = `${student.ID}_${student.VCNAME}`;
+          const hubId = faceIdMappingStorage.getNumber(userName);
+          if (hubId) {
+            console.log(`[学生删除] 删除用户: ${userName}, Hub ID: ${hubId}`);
+            await InspireFace.featureHubFaceRemove(hubId);
+            faceIdMappingStorage.delete(userName);
+            userInfoCacheStorage.delete(userName);
           }
         }
 
+        // 注册
+        console.log(`[学生注册] 需要注册 ${toRegister.length} 个人脸...`);
         for (const student of toRegister) {
           const userName = `${student.ID}_${student.VCNAME}`;
+          console.log(`[学生注册] 开始处理用户: ${userName}, 图片: ${student.VCIMGPATH}`);
           const feature = await extractFeatureFromUrlSession(
             student.VCIMGPATH,
             sessionRef.current
           );
           if (feature) {
-            const result = await InspireFace.featureHubFaceInsert({
+            console.log(`[学生注册] 特征提取成功 for ${userName}`);
+            const faceId = await InspireFace.featureHubFaceInsert({
               id: -1,
               feature,
             });
-            if (result && typeof result.id === 'number' && result.id !== -1) {
-              faceIdMappingStorage.set(userName, result.id);
+            console.log(`[学生注册] featureHubFaceInsert 结果 for ${userName}:`, faceId);
+            if (faceId && typeof faceId === 'number' && faceId !== -1) {
+              faceIdMappingStorage.set(userName, faceId);
               userInfoCacheStorage.set(
                 userName,
                 JSON.stringify({
@@ -219,11 +220,14 @@ const ArcSoftInfoScreen = () => {
                   imageUrl: student.VCIMGPATH,
                 })
               );
+              console.log(`[学生注册] ${userName} 注册成功，Hub ID: ${faceId}`);
             } else {
-              showToast(`${userName} 注册失败`);
+              showToast(`${userName} 注册失败: 插入数据库失败`);
+              console.error(`[学生注册] ${userName} 注册失败: 插入数据库失败，结果:`, faceId);
             }
           } else {
             showToast(`无法从照片中提取 ${userName} 的人脸`);
+            console.error(`[学生注册] 无法从照片中提取 ${userName} 的人脸: ${student.VCIMGPATH}`);
           }
         }
 
@@ -233,6 +237,7 @@ const ArcSoftInfoScreen = () => {
             `${FACE_DTVER_KEY_PREFIX}${selectedCampus.ID}`,
             newVersionNum
           );
+          console.log(`[学生] 版本号更新为: ${newVersionNum}`);
         }
       } catch (error) {
         const errMsg = (error as Error).message;
@@ -244,7 +249,7 @@ const ArcSoftInfoScreen = () => {
   );
 
   const findTeacherImg = useCallback(
-    async (currentVer: number, localUserNames: string[]) => {
+    async (currentVer: number) => {
       if (!sessionRef.current || !selectedCampus) {
         showToast('人脸识别会话或校区未初始化');
         return;
@@ -260,47 +265,43 @@ const ArcSoftInfoScreen = () => {
         const newVersionStr = res.data?.['#result-set-2']?.[0]?.DTVER;
         const toRegister = res.data?.['#result-set-3'] || [];
 
-        if (currentVer === 0) {
-          const teacherUserNames = localUserNames.filter((name) =>
-            name.includes('_T_')
-          );
-          for (const name of teacherUserNames) {
-            const hubId = faceIdMappingStorage.getNumber(name);
-            if (hubId) {
-              await InspireFace.featureHubFaceRemove(hubId);
-              faceIdMappingStorage.delete(name);
-              userInfoCacheStorage.delete(name);
-            }
-          }
-        } else {
-          for (const teacher of toDelete) {
-            const teacherName = localUserNames.find((name) =>
-              name.startsWith(`${teacher.ID}_T_`)
+        // 增量删除
+        for (const teacher of toDelete) {
+          const allTeacherKeys = faceIdMappingStorage
+            .getAllKeys()
+            .filter(
+              (key) =>
+                key.startsWith(`${teacher.ID}_T_`) && key.includes(teacher.VCNAME)
             );
-            if (teacherName) {
-              const hubId = faceIdMappingStorage.getNumber(teacherName);
-              if (hubId) {
-                await InspireFace.featureHubFaceRemove(hubId);
-                faceIdMappingStorage.delete(teacherName);
-                userInfoCacheStorage.delete(teacherName);
-              }
+          for (const key of allTeacherKeys) {
+            const hubId = faceIdMappingStorage.getNumber(key);
+            if (hubId) {
+              console.log(`[教师删除] 删除用户: ${key}, Hub ID: ${hubId}`);
+              await InspireFace.featureHubFaceRemove(hubId);
+              faceIdMappingStorage.delete(key);
+              userInfoCacheStorage.delete(key);
             }
           }
         }
 
+        // 注册
+        console.log(`[教师注册] 需要注册 ${toRegister.length} 个人脸...`);
         for (const teacher of toRegister) {
           const userName = `${teacher.ID}_T_${teacher.VCNAME}`;
+          console.log(`[教师注册] 开始处理用户: ${userName}, 图片: ${teacher.VCIMGPATH}`);
           const feature = await extractFeatureFromUrlSession(
             teacher.VCIMGPATH,
             sessionRef.current
           );
           if (feature) {
-            const result = await InspireFace.featureHubFaceInsert({
+            console.log(`[教师注册] 特征提取成功 for ${userName}`);
+            const faceId = await InspireFace.featureHubFaceInsert({
               id: -1,
               feature,
             });
-            if (result && typeof result.id === 'number' && result.id !== -1) {
-              faceIdMappingStorage.set(userName, result.id);
+            console.log(`[教师注册] featureHubFaceInsert 结果 for ${userName}:`, faceId);
+            if (faceId && typeof faceId === 'number' && faceId !== -1) {
+              faceIdMappingStorage.set(userName, faceId);
               userInfoCacheStorage.set(
                 userName,
                 JSON.stringify({
@@ -308,11 +309,14 @@ const ArcSoftInfoScreen = () => {
                   imageUrl: teacher.VCIMGPATH,
                 })
               );
+              console.log(`[教师注册] ${userName} 注册成功，Hub ID: ${faceId}`);
             } else {
-              showToast(`${userName} 注册失败`);
+              showToast(`${userName} 注册失败: 插入数据库失败`);
+              console.error(`[教师注册] ${userName} 注册失败: 插入数据库失败，结果:`, faceId);
             }
           } else {
             showToast(`无法从照片中提取 ${userName} 的人脸`);
+            console.error(`[教师注册] 无法从照片中提取 ${userName} 的人脸: ${teacher.VCIMGPATH}`);
           }
         }
 
@@ -322,6 +326,7 @@ const ArcSoftInfoScreen = () => {
             `${FACE_DTVER_T_KEY_PREFIX}${selectedCampus.ID}`,
             newVersionNum
           );
+          console.log(`[教师] 版本号更新为: ${newVersionNum}`);
         }
       } catch (error) {
         const errMsg = (error as Error).message;
@@ -339,11 +344,23 @@ const ArcSoftInfoScreen = () => {
       setIsBeginFace(false);
 
       try {
-        const localUserNames = faceIdMappingStorage.getAllKeys();
-        console.log(`从映射中加载了 ${localUserNames.length} 个用户名`);
+        // 如果是全量更新，则先清空所有数据
+        if (currentVer === 0 && currentVerT === 0) {
+          console.log('执行全量更新，正在清除所有本地人脸数据...');
+          const allKeys = faceIdMappingStorage.getAllKeys();
+          for (const key of allKeys) {
+            const hubId = faceIdMappingStorage.getNumber(key);
+            if (hubId) {
+              await InspireFace.featureHubFaceRemove(hubId);
+            }
+          }
+          faceIdMappingStorage.clearAll();
+          userInfoCacheStorage.clearAll();
+          console.log('已清除所有本地人脸数据和缓存。');
+        }
 
-        await findStudentImg(currentVer, localUserNames);
-        await findTeacherImg(currentVerT, localUserNames);
+        await findStudentImg(currentVer);
+        await findTeacherImg(currentVerT);
 
         const finalUserNames = faceIdMappingStorage.getAllKeys();
         console.log(`同步完成，最终人脸数量: ${finalUserNames.length}`);
@@ -356,7 +373,7 @@ const ArcSoftInfoScreen = () => {
         showToast(`初始化人脸库失败: ${errMsg}`);
       }
     },
-    [findStudentImg, findTeacherImg, showToast, selectedCampus]
+    [findStudentImg, findTeacherImg, selectedCampus]
   );
 
   const loadInitImg = async () => {
@@ -365,7 +382,8 @@ const ArcSoftInfoScreen = () => {
       return;
     }
     console.log('手动触发“重新载入照片”...');
-    showToast('正在重新加载所有人脸数据...');
+    showToast(`正在为校区 [${selectedCampus.VCNAME}] 重新加载所有人脸数据...`);
+    // 传入 0, 0 强制进行全量同步
     await initfaceImg(0, 0);
   };
 
@@ -374,17 +392,15 @@ const ArcSoftInfoScreen = () => {
       const currentUser = getCurrentUser();
       if (!currentUser) return;
       const res = await apiFind('szproctec', {
-        procedure: 'st_con_campus_select', // 更新接口名称
+        procedure: 'st_con_campus_select',
         i_idopr: currentUser.ID,
-        i_vcpym: '', // 添加参数
-        i_isenable: 1, // 添加参数
+        i_vcpym: '',
+        i_isenable: 1,
       });
-      // 假设返回的数据在 res.data['#result-set-1']
       const dataKey = '#result-set-1';
       if (res && res.data && res.data[dataKey]) {
         const campuses: Campus[] = res.data[dataKey];
         setCampusList(campuses);
-        // 设置默认校区
         const defaultCampus =
           campuses.find((c) => c.ID === currentUser.ID) || campuses[0];
         if (defaultCampus) {
@@ -415,21 +431,7 @@ const ArcSoftInfoScreen = () => {
     };
   }, []);
 
-  // 当校区变化时，触发人脸数据加载
-  useEffect(() => {
-    if (selectedCampus) {
-      console.log(`校区已切换至: ${selectedCampus.VCNAME}`);
-      const studentVer =
-        faceVersionStorage.getNumber(
-          `${FACE_DTVER_KEY_PREFIX}${selectedCampus.ID}`
-        ) || 0;
-      const teacherVer =
-        faceVersionStorage.getNumber(
-          `${FACE_DTVER_T_KEY_PREFIX}${selectedCampus.ID}`
-        ) || 0;
-      initfaceImg(studentVer, teacherVer);
-    }
-  }, [selectedCampus, initfaceImg]);
+  // 移除当校区变化时自动加载的 useEffect
 
   const findInfo = async () => {
     try {
