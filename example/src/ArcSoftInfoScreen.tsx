@@ -10,24 +10,66 @@ import {
   Alert,
   TextInput,
 } from 'react-native';
+import { MMKV } from 'react-native-mmkv';
 import { getCurrentUser } from './User';
 import { apiFind } from './api';
+
+// 为识别参数创建一个单独的 MMKV 存储实例
+const recognitionStorage = new MMKV({
+  id: 'recognition-params-storage',
+});
+
+const RECOGNITION_PARAMS_KEY = 'recognition_params';
 
 const ArcSoftInfoScreen = () => {
   const [typetext, setTypetext] = useState('');
   const [outDataInfo, setOutDataInfo] = useState({ data2: [] });
+
+  // 识别参数的状态
   const [isFront, setIsFront] = useState(true);
   const [isLiveness, setIsLiveness] = useState(true);
   const [faceScore, setFaceScore] = useState(70);
   const [faceQuality, setFaceQuality] = useState(70);
   const [facePreviewSize, setFacePreviewSize] = useState('');
+
   const [listSize, setListSize] = useState([]);
-  const [msg, setMsg] = useState('1'); // '1' for activated, '0' for not
+  const [msg, setMsg] = useState('1'); // '1' 已激活, '0' 未激活
   const [isBeginFace, setIsBeginFace] = useState(false);
   const [idtype, setIdtype] = useState(0);
+  const [paramsInitialized, setParamsInitialized] = useState(false);
 
+  // 组件加载时的主 effect
   useEffect(() => {
-    // Mocking navigation parameters
+    // 统一的数据加载入口
+    const loadScreenData = async () => {
+      // 1. 总是从 API 获取最新数据
+      await findInfo();
+
+      // 2. 加载本地缓存的识别参数（如果存在）
+      try {
+        const savedParamsString = recognitionStorage.getString(RECOGNITION_PARAMS_KEY);
+        if (savedParamsString) {
+          console.log('从 MMKV 加载已保存的识别参数...');
+          const savedParams = JSON.parse(savedParamsString);
+          setFaceScore(savedParams.faceScore);
+          setFaceQuality(savedParams.faceQuality);
+          setIsFront(savedParams.isFront);
+          setIsLiveness(savedParams.isLiveness);
+          setFacePreviewSize(savedParams.facePreviewSize);
+        } else {
+          console.log('MMKV 中没有识别参数缓存。');
+        }
+      } catch (error) {
+        console.error('从 MMKV 加载参数失败:', error);
+      } finally {
+        // 标记参数初始化完成，此后用户的修改才会被保存
+        setParamsInitialized(true);
+      }
+    };
+
+    loadScreenData();
+
+    // 模拟导航参数
     const params = { idtype: 4, vccoursetype: '晚托', vcschool: '实验小学' };
     setIdtype(params.idtype);
 
@@ -35,39 +77,76 @@ const ArcSoftInfoScreen = () => {
       setTypetext(`校门口刷脸:${params.vccoursetype} [${params.vcschool}]`);
     } else if (params.idtype === 4) {
       setTypetext('托管刷脸：按时间段区分午托晚托');
-      findInfo();
     }
 
-    // Simulate device activation check
-    // In a real app, this would call a native module
+    // 模拟设备激活检查
     setTimeout(() => {
-      setMsg('1'); // Assume activated
+      setMsg('1'); // 假设已激活
       initfaceImg();
     }, 500);
   }, []);
 
+  // 当识别参数发生变化时，自动保存到 MMKV
+  useEffect(() => {
+    // 确保只在初始化完成后才进行保存，避免初始加载时就覆盖
+    if (!paramsInitialized) {
+      return;
+    }
+
+    const saveParamsToMmkv = () => {
+      const paramsToSave = {
+        faceScore,
+        faceQuality,
+        isFront,
+        isLiveness,
+        facePreviewSize,
+      };
+      console.log('识别参数已修改，保存到 MMKV:', paramsToSave);
+      recognitionStorage.set(RECOGNITION_PARAMS_KEY, JSON.stringify(paramsToSave));
+    };
+
+    saveParamsToMmkv();
+  }, [isFront, isLiveness, faceScore, faceQuality, facePreviewSize, paramsInitialized]);
+
+  // 从 API 获取所有数据
   const findInfo = async () => {
     try {
-      const res = await apiFind('szproctec',{
+      const res = await apiFind('szproctec', {
         procedure: 'st_pfm_config_face_se_init',
       });
       if (res?.data) {
         const resultSet1 = res.data['#result-set-1'];
         const resultSet2 = res.data['#result-set-2'];
 
-        if (resultSet1 && resultSet1.length > 0) {
-          const config = resultSet1[0];
-          setFaceScore(Number(config.QIFACESCORE));
-          setFaceQuality(Number(config.QIFACEWHILE));
-          // Assuming VCFACENET '1' means front camera, empty or '0' means rear
-          setIsFront(config.VCFACENET === '1');
-          // Assuming ISFACELAST '1' means liveness enabled, '0' means disabled
-          setIsLiveness(config.ISFACELAST === '1');
-          setFacePreviewSize(config.QIFACESIZE);
+        // 1. 总是更新签到时间
+        if (resultSet2) {
+          console.log('从 API 更新签到时间数据...');
+          setOutDataInfo({ data2: resultSet2 });
         }
 
-        if (resultSet2) {
-          setOutDataInfo({ data2: resultSet2 });
+        // 2. 如果本地没有缓存，则使用 API 数据作为识别参数的初始值
+        const hasCachedParams = recognitionStorage.contains(RECOGNITION_PARAMS_KEY);
+        if (!hasCachedParams && resultSet1 && resultSet1.length > 0) {
+          const config = resultSet1[0];
+          console.log('使用 API 数据作为初始识别参数:', config);
+
+          const apiParams = {
+            faceScore: Number(config.QIFACESCORE) || 70,
+            faceQuality: Number(config.QIFACEWHILE) || 70,
+            isFront: config.VCFACENET === '1',
+            isLiveness: config.ISFACELAST === '1',
+            facePreviewSize: config.QIFACESIZE || '',
+          };
+
+          // 更新状态
+          setFaceScore(apiParams.faceScore);
+          setFaceQuality(apiParams.faceQuality);
+          setIsFront(apiParams.isFront);
+          setIsLiveness(apiParams.isLiveness);
+          setFacePreviewSize(apiParams.facePreviewSize);
+
+          // 并将这份初始数据存入 MMKV
+          recognitionStorage.set(RECOGNITION_PARAMS_KEY, JSON.stringify(apiParams));
         }
       }
     } catch (error) {
@@ -76,30 +155,10 @@ const ArcSoftInfoScreen = () => {
   };
 
   const initfaceImg = () => {
-    // Placeholder for native module calls to initialize face recognition
     console.log('Initializing face images...');
-    // Simulate loading data and enabling the "start face recognition" button
     setTimeout(() => {
       setIsBeginFace(true);
     }, 1000);
-  };
-
-  const sliderChange = (value: number) => {
-    setFaceScore(value);
-  };
-
-  const sliderQuality = (value: number) => {
-    setFaceQuality(value);
-  };
-
-  const getSize = () => {
-    // Placeholder for getting supported preview sizes from native module
-    const sizes = [
-      { VCNAME: '640x480' },
-      { VCNAME: '1280x720' },
-      { VCNAME: '1920x1080' },
-    ];
-    setListSize(sizes);
   };
 
   return (
@@ -158,7 +217,7 @@ const ArcSoftInfoScreen = () => {
               style={styles.input}
               keyboardType="numeric"
               value={String(faceScore)}
-              onChangeText={(text) => sliderChange(Number(text))}
+              onChangeText={(text) => setFaceScore(Number(text))}
             />
           </View>
           <View style={styles.row}>
@@ -167,12 +226,17 @@ const ArcSoftInfoScreen = () => {
               style={styles.input}
               keyboardType="numeric"
               value={String(faceQuality)}
-              onChangeText={(text) => sliderQuality(Number(text))}
+              onChangeText={(text) => setFaceQuality(Number(text))}
             />
           </View>
           <View style={styles.row}>
             <Text style={styles.label}>分辨率:</Text>
-            <Text>{facePreviewSize || '未设置'}</Text>
+            <TextInput
+              style={styles.input}
+              value={facePreviewSize}
+              onChangeText={setFacePreviewSize}
+              placeholder="例如 640x480"
+            />
           </View>
           <View style={styles.row}>
             <Text style={styles.label}>设备状态:</Text>
