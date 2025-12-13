@@ -99,9 +99,12 @@ const ArcSoftInfoScreen = () => {
   const [isProgressVisible, setProgressVisible] = useState(false);
   const [progressTotal, setProgressTotal] = useState(0);
   const [progressCurrent, setProgressCurrent] = useState(0);
+  const [progressFailed, setProgressFailed] = useState(0);
   const [progressMessage, setProgressMessage] = useState('');
   const [progressLog, setProgressLog] = useState<LogEntry[]>([]);
   const [isProgressComplete, setProgressComplete] = useState(false);
+  const [isSuccess, setIsSuccess] = useState(false);
+  const [elapsedTime, setElapsedTime] = useState(''); // 新增：用于存储总耗时
   const progressScrollViewRef = useRef<ScrollView>(null);
 
   const [isFront, setIsFront] = useState(true);
@@ -191,8 +194,18 @@ const ArcSoftInfoScreen = () => {
     setProgressVisible(true);
     setProgressLog([]);
     setProgressComplete(false);
+    setIsSuccess(false);
+    setProgressFailed(0);
+    setElapsedTime('');
+
+    const startTime = performance.now();
+    let wasSuccessful = true;
 
     const updateProgress = async (detail: string, type: LogEntry['type'] = 'log') => {
+      if (type === 'error') {
+        wasSuccessful = false;
+        setProgressFailed(prev => prev + 1);
+      }
       console.log(`[进度] ${detail}`);
       setProgressLog(prevLog => [...prevLog, { text: detail, type }]);
       await yieldToMain();
@@ -271,8 +284,6 @@ const ArcSoftInfoScreen = () => {
           } else {
             await updateProgress(`${userName} 的数据库插入失败`, 'error');
           }
-        } else {
-          await updateProgress(`${userName} 的特征提取失败`, 'error');
         }
       }
 
@@ -307,8 +318,6 @@ const ArcSoftInfoScreen = () => {
           } else {
             await updateProgress(`${userName} 的数据库插入失败`, 'error');
           }
-        } else {
-          await updateProgress(`${userName} 的特征提取失败`, 'error');
         }
       }
 
@@ -318,14 +327,22 @@ const ArcSoftInfoScreen = () => {
       await updateProgress(`发生严重错误: ${errMsg}`, 'error');
       console.error('重新载入照片失败:', errMsg);
     } finally {
+      const endTime = performance.now();
+      const duration = (endTime - startTime) / 1000;
+      setElapsedTime(`耗时: ${duration.toFixed(2)} 秒`);
       setIsBeginFace(true);
       setProgressComplete(true);
+      setIsSuccess(wasSuccessful);
     }
   };
 
   useEffect(() => {
-    setProgressMessage(`共 ${progressTotal} 张，已处理 ${progressCurrent} 张`);
-  }, [progressCurrent, progressTotal]);
+    let message = `共 ${progressTotal} 张，已处理 ${progressCurrent} 张`;
+    if (progressFailed > 0) {
+      message += `, 失败 ${progressFailed} 张`;
+    }
+    setProgressMessage(message);
+  }, [progressCurrent, progressTotal, progressFailed]);
 
   useEffect(() => {
     if (isProgressVisible) {
@@ -418,7 +435,7 @@ const ArcSoftInfoScreen = () => {
   };
 
   const handleCopyLog = () => {
-    const logString = progressLog.map(log => log.text).join('\n');
+    const logString = progressLog.map(log => `[${log.type.toUpperCase()}] ${log.text}`).join('\n');
     Clipboard.setString(logString);
     showToast('日志已复制到剪贴板');
   };
@@ -556,8 +573,15 @@ const ArcSoftInfoScreen = () => {
       >
         <View style={styles.progressModalContainer}>
           <View style={styles.progressModalContent}>
-            <ActivityIndicator size="large" color="#2fd9b1" />
+            {isProgressComplete ? (
+              <Text style={isSuccess ? styles.successIcon : styles.errorIcon}>
+                {isSuccess ? '✓' : '✗'}
+              </Text>
+            ) : (
+              <ActivityIndicator size="large" color="#2fd9b1" />
+            )}
             <Text style={styles.progressText}>{progressMessage}</Text>
+            {isProgressComplete && <Text style={styles.elapsedTimeText}>{elapsedTime}</Text>}
             <ScrollView
               ref={progressScrollViewRef}
               style={styles.progressLogContainer}
@@ -761,6 +785,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
+  elapsedTimeText: {
+    marginTop: 5,
+    fontSize: 14,
+    color: '#333',
+  },
   progressLogContainer: {
     marginTop: 10,
     height: 200, // 固定高度
@@ -788,6 +817,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: '100%',
     marginTop: 20,
+  },
+  successIcon: {
+    fontSize: 40,
+    color: 'green',
+  },
+  errorIcon: {
+    fontSize: 40,
+    color: 'red',
   },
 });
 
