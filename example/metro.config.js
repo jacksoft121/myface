@@ -1,9 +1,9 @@
 const path = require('path');
-const { getDefaultConfig } = require('@react-native/metro-config');
-const { getConfig } = require('react-native-builder-bob/metro-config');
-const pkg = require('../package.json');
+const { getDefaultConfig, mergeConfig } = require('@react-native/metro-config');
 
 const root = path.resolve(__dirname, '..');
+const exampleNodeModules = path.resolve(__dirname, 'node_modules');
+const rootNodeModules = path.resolve(root, 'node_modules');
 
 /**
  * Metro configuration
@@ -11,8 +11,13 @@ const root = path.resolve(__dirname, '..');
  *
  * @type {import('metro-config').MetroConfig}
  */
-module.exports = getConfig(getDefaultConfig(__dirname), {
-  root,
-  pkg,
-  project: __dirname,
-});
+const config = {
+  watchFolders: [root],
+
+  resolver: {
+    nodeModulesPaths: [exampleNodeModules, rootNodeModules],
+    disableHierarchicalLookup: true,
+  },
+};
+
+module.exports = mergeConfig(getDefaultConfig(__dirname), config);

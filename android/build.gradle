@@ -24,7 +24,7 @@ apply plugin: "com.android.library"
 apply plugin: "kotlin-android"
 apply from: '../nitrogen/generated/android/nitroinspireface+autolinking.gradle'
 
-apply plugin: "com.facebook.react"
+
 
 def getExtOrIntegerDefault(name) {
   return rootProject.ext.has(name) ? rootProject.ext.get(name) : (project.properties["NitroInspireFace_" + name]).toInteger()
@@ -143,4 +143,7 @@ dependencies {
   implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
   implementation project(":react-native-nitro-modules")
 }
-
+configurations.all {
+  exclude group: "com.reactnativecommunity", module: "slider"
+  exclude group: "com.reactnativecommunity", module: "picker"
+}

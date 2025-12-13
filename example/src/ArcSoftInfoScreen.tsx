@@ -11,6 +11,7 @@ import {
   TextInput,
 } from 'react-native';
 import { MMKV } from 'react-native-mmkv';
+import Slider from '@react-native-community/slider'; // 导入 Slider 组件
 import { getCurrentUser } from './User';
 import { apiFind } from './api';
 
@@ -40,12 +41,8 @@ const ArcSoftInfoScreen = () => {
 
   // 组件加载时的主 effect
   useEffect(() => {
-    // 统一的数据加载入口
     const loadScreenData = async () => {
-      // 1. 总是从 API 获取最新数据
       await findInfo();
-
-      // 2. 加载本地缓存的识别参数（如果存在）
       try {
         const savedParamsString = recognitionStorage.getString(RECOGNITION_PARAMS_KEY);
         if (savedParamsString) {
@@ -62,14 +59,12 @@ const ArcSoftInfoScreen = () => {
       } catch (error) {
         console.error('从 MMKV 加载参数失败:', error);
       } finally {
-        // 标记参数初始化完成，此后用户的修改才会被保存
         setParamsInitialized(true);
       }
     };
 
     loadScreenData();
 
-    // 模拟导航参数
     const params = { idtype: 4, vccoursetype: '晚托', vcschool: '实验小学' };
     setIdtype(params.idtype);
 
@@ -79,20 +74,17 @@ const ArcSoftInfoScreen = () => {
       setTypetext('托管刷脸：按时间段区分午托晚托');
     }
 
-    // 模拟设备激活检查
     setTimeout(() => {
-      setMsg('1'); // 假设已激活
+      setMsg('1');
       initfaceImg();
     }, 500);
   }, []);
 
   // 当识别参数发生变化时，自动保存到 MMKV
   useEffect(() => {
-    // 确保只在初始化完成后才进行保存，避免初始加载时就覆盖
     if (!paramsInitialized) {
       return;
     }
-
     const saveParamsToMmkv = () => {
       const paramsToSave = {
         faceScore,
@@ -104,7 +96,6 @@ const ArcSoftInfoScreen = () => {
       console.log('识别参数已修改，保存到 MMKV:', paramsToSave);
       recognitionStorage.set(RECOGNITION_PARAMS_KEY, JSON.stringify(paramsToSave));
     };
-
     saveParamsToMmkv();
   }, [isFront, isLiveness, faceScore, faceQuality, facePreviewSize, paramsInitialized]);
 
@@ -118,13 +109,11 @@ const ArcSoftInfoScreen = () => {
         const resultSet1 = res.data['#result-set-1'];
         const resultSet2 = res.data['#result-set-2'];
 
-        // 1. 总是更新签到时间
         if (resultSet2) {
           console.log('从 API 更新签到时间数据...');
           setOutDataInfo({ data2: resultSet2 });
         }
 
-        // 2. 如果本地没有缓存，则使用 API 数据作为识别参数的初始值
         const hasCachedParams = recognitionStorage.contains(RECOGNITION_PARAMS_KEY);
         if (!hasCachedParams && resultSet1 && resultSet1.length > 0) {
           const config = resultSet1[0];
@@ -138,14 +127,12 @@ const ArcSoftInfoScreen = () => {
             facePreviewSize: config.QIFACESIZE || '',
           };
 
-          // 更新状态
           setFaceScore(apiParams.faceScore);
           setFaceQuality(apiParams.faceQuality);
           setIsFront(apiParams.isFront);
           setIsLiveness(apiParams.isLiveness);
           setFacePreviewSize(apiParams.facePreviewSize);
 
-          // 并将这份初始数据存入 MMKV
           recognitionStorage.set(RECOGNITION_PARAMS_KEY, JSON.stringify(apiParams));
         }
       }
@@ -213,21 +200,27 @@ const ArcSoftInfoScreen = () => {
           </View>
           <View style={styles.row}>
             <Text style={styles.label}>相似度:</Text>
-            <TextInput
-              style={styles.input}
-              keyboardType="numeric"
-              value={String(faceScore)}
-              onChangeText={(text) => setFaceScore(Number(text))}
+            <Slider
+              style={styles.slider}
+              minimumValue={1}
+              maximumValue={100}
+              step={1}
+              value={faceScore}
+              onSlidingComplete={setFaceScore}
             />
+            <Text style={styles.sliderValue}>{faceScore}</Text>
           </View>
           <View style={styles.row}>
             <Text style={styles.label}>拍照质量:</Text>
-            <TextInput
-              style={styles.input}
-              keyboardType="numeric"
-              value={String(faceQuality)}
-              onChangeText={(text) => setFaceQuality(Number(text))}
+            <Slider
+              style={styles.slider}
+              minimumValue={1}
+              maximumValue={100}
+              step={1}
+              value={faceQuality}
+              onSlidingComplete={setFaceQuality}
             />
+            <Text style={styles.sliderValue}>{faceQuality}</Text>
           </View>
           <View style={styles.row}>
             <Text style={styles.label}>分辨率:</Text>
@@ -271,7 +264,7 @@ const ArcSoftInfoScreen = () => {
 const styles = StyleSheet.create({
   container: {
     padding: 15,
-    marginBottom: 100, // Space for the bottom bar
+    marginBottom: 100,
   },
   card: {
     backgroundColor: '#FFFFFF',
@@ -315,6 +308,14 @@ const styles = StyleSheet.create({
     borderColor: '#ccc',
     padding: 8,
     borderRadius: 4,
+  },
+  slider: {
+    flex: 1,
+    height: 40,
+  },
+  sliderValue: {
+    width: 40,
+    textAlign: 'center',
   },
   bottomBar: {
     position: 'absolute',
