@@ -12,11 +12,21 @@ import {
   ImageBackground,
 } from 'react-native';
 import { MMKV } from 'react-native-mmkv';
-import { apiFind,apiLogin } from './api';
+import { apiLogin } from './api';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
-interface LoginScreenProps {
-  onLoginSuccess: (userData: any) => void;
-}
+// 定义导航栈的参数类型
+type RootStackParamList = {
+  Login: undefined;
+  ArcSoftInfo: undefined;
+  RegisteredFaces: undefined;
+};
+
+type LoginScreenNavigationProp = NativeStackNavigationProp<
+  RootStackParamList,
+  'Login'
+>;
 
 const storage = new MMKV({
   id: 'login-credentials',
@@ -32,7 +42,8 @@ const STORAGE_KEYS = {
 const { width, height } = Dimensions.get('window');
 const rpx = (px: number) => (width / 750) * px;
 
-const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
+const LoginScreen: React.FC = () => {
+  const navigation = useNavigation<LoginScreenNavigationProp>();
   const [phone, setPhone] = useState('');
   const [codeChecked, setCodeChecked] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
@@ -68,7 +79,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       storage.delete(STORAGE_KEYS.USER_PASSWORD);
     }
     storage.set(STORAGE_KEYS.CURRENT_USER, JSON.stringify(userData));
-    onLoginSuccess(userData);
+    // 使用导航替换当前屏幕
+    navigation.replace('ArcSoftInfo');
   };
 
   const handleLogin = async () => {
@@ -78,7 +90,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     }
 
     try {
-      const response: any = await apiLogin('tecloginbyphone',{
+      const response: any = await apiLogin('tecloginbyphone', {
         funcapi: 'tecloginbyphone',
         procedure: '',
         I_VCPHONE: phone,
@@ -90,7 +102,10 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
       if (resultSet && resultSet.length > 0) {
         if (resultSet[0].o_issuc === '0') {
-          Alert.alert('登录失败', resultSet[0].o_msg || '没有此用户或用户名密码错误');
+          Alert.alert(
+            '登录失败',
+            resultSet[0].o_msg || '没有此用户或用户名密码错误'
+          );
         } else if (resultSet.length === 1) {
           processLogin(resultSet[0]);
         } else {
@@ -102,7 +117,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
           Alert.alert('请选择您要登录的机构', '', options);
         }
       } else {
-        Alert.alert('登录失败', '没有找到此用户');
+        Alert.alert('登录失败', '沒有找到此用戶');
       }
     } catch (error) {
       console.error('登录请求失败:', error);
@@ -115,11 +130,23 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
   };
 
   return (
-    <ImageBackground source={require('./static/icon/logbg.png')} style={styles.fullBackground}>
+    <ImageBackground
+      source={require('./static/icon/logbg.png')}
+      style={styles.fullBackground}
+    >
       <ScrollView contentContainerStyle={styles.scrollViewContainer}>
-        <Image source={require('./static/icon/xian.png')} style={styles.img3} />
-        <Image source={require('./static/icon/tencher.png')} style={styles.img2} />
-        <Image source={require('./static/icon/logo_szstg.png')} style={styles.img1} />
+        <Image
+          source={require('./static/icon/xian.png')}
+          style={styles.img3}
+        />
+        <Image
+          source={require('./static/icon/tencher.png')}
+          style={styles.img2}
+        />
+        <Image
+          source={require('./static/icon/logo_szstg.png')}
+          style={styles.img1}
+        />
         <View style={styles.img4} />
         <View style={styles.img5} />
 
@@ -153,7 +180,9 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                 style={styles.checkboxContainer}
                 onPress={toggleRememberMe}
               >
-                <View style={[styles.checkbox, rememberMe && styles.checkboxChecked]}>
+                <View
+                  style={[styles.checkbox, rememberMe && styles.checkboxChecked]}
+                >
                   {rememberMe && <Text style={styles.checkmark}>✓</Text>}
                 </View>
                 <Text style={styles.rememberMeText}>记住密码</Text>
