@@ -3,7 +3,10 @@ import {getCurrentUser} from "./User";
 
 export const apiFind = async (func: string,params: Record<string, any>) => {
   const currentUser = getCurrentUser();
-  if (!currentUser) return;
+  if (!currentUser) {
+    console.error("无法获取当前用户信息，请求被中止。");
+    return;
+  }
   let urlfind = currentUser.urlfind;
   const baseUrl = urlfind+"?func="+func;
 
@@ -13,9 +16,13 @@ export const apiFind = async (func: string,params: Record<string, any>) => {
       body.append(key, params[key]);
     }
   }
-  if (params.ID == null) {
-      body.append('i_idopr', currentUser.ID);
-  }
+
+  // 不再自动添加 i_idopr。让调用者明确提供。
+  // if (params.ID == null) {
+  //     body.append('i_idopr', currentUser.ID);
+  // }
+
+  // 自动添加 token
   if (params.g_vctoken == null) {
       body.append('g_vctoken', currentUser.token);
   }

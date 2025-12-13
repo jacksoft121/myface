@@ -11,6 +11,9 @@ import {
   TextInput,
   Platform,
   ToastAndroid,
+  Modal,
+  FlatList,
+  SafeAreaView,
 } from 'react-native';
 import { MMKV } from 'react-native-mmkv';
 import Slider from '@react-native-community/slider';
@@ -27,6 +30,7 @@ import {
 } from 'react-native-nitro-inspire-face';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { getCurrentUser } from './User';
 
 // #region Type Definitions
 type RootStackParamList = {
@@ -39,6 +43,11 @@ type ArcSoftInfoScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
   'ArcSoftInfo'
 >;
+
+interface Campus {
+  ID: number;
+  VCNAME: string;
+}
 // #endregion
 
 // #region MMKV and InspireFace Initialization
@@ -70,13 +79,18 @@ try {
 // #endregion
 
 const RECOGNITION_PARAMS_KEY = 'recognition_params';
-const FACE_DTVER_KEY = 'FACE_DTVER';
-const FACE_DTVER_T_KEY = 'FACE_DTVER_T';
+const FACE_DTVER_KEY_PREFIX = 'FACE_DTVER_';
+const FACE_DTVER_T_KEY_PREFIX = 'FACE_DTVER_T_';
 
 const ArcSoftInfoScreen = () => {
   const navigation = useNavigation<ArcSoftInfoScreenNavigationProp>();
   const [typetext, setTypetext] = useState('');
   const [outDataInfo, setOutDataInfo] = useState({ data2: [] });
+
+  // 校区选择相关状态
+  const [campusList, setCampusList] = useState<Campus[]>([]);
+  const [selectedCampus, setSelectedCampus] = useState<Campus | null>(null);
+  const [isCampusModalVisible, setCampusModalVisible] = useState(false);
 
   const [isFront, setIsFront] = useState(true);
   const [isLiveness, setIsLiveness] = useState(true);
@@ -88,9 +102,6 @@ const ArcSoftInfoScreen = () => {
   const [isBeginFace, setIsBeginFace] = useState(false);
   const [idtype, setIdtype] = useState(0);
   const [paramsInitialized, setParamsInitialized] = useState(false);
-
-  const [faceDtVer, setFaceDtVer] = useState(0);
-  const [faceDtVerT, setFaceDtVerT] = useState(0);
 
   const sessionRef = useRef<InspireFaceSession | null>(null);
 
@@ -149,13 +160,14 @@ const ArcSoftInfoScreen = () => {
 
   const findStudentImg = useCallback(
     async (currentVer: number, localUserNames: string[]) => {
-      if (!sessionRef.current) {
-        showToast('人脸识别会话未初始化');
+      if (!sessionRef.current || !selectedCampus) {
+        showToast('人脸识别会话或校区未初始化');
         return;
       }
       try {
         const res = await apiFind('szproctec', {
           procedure: 'st_con_student_se_imgpath',
+          i_idcampus: selectedCampus.ID,
           i_dtver: currentVer,
         });
 
@@ -217,8 +229,10 @@ const ArcSoftInfoScreen = () => {
 
         if (newVersionStr) {
           const newVersionNum = Number(newVersionStr);
-          faceVersionStorage.set(FACE_DTVER_KEY, newVersionNum);
-          setFaceDtVer(newVersionNum);
+          faceVersionStorage.set(
+            `${FACE_DTVER_KEY_PREFIX}${selectedCampus.ID}`,
+            newVersionNum
+          );
         }
       } catch (error) {
         const errMsg = (error as Error).message;
@@ -226,18 +240,19 @@ const ArcSoftInfoScreen = () => {
         showToast(`同步学生人脸失败: ${errMsg}`);
       }
     },
-    [showToast]
+    [showToast, selectedCampus]
   );
 
   const findTeacherImg = useCallback(
     async (currentVer: number, localUserNames: string[]) => {
-      if (!sessionRef.current) {
-        showToast('人脸识别会话未初始化');
+      if (!sessionRef.current || !selectedCampus) {
+        showToast('人脸识别会话或校区未初始化');
         return;
       }
       try {
         const res = await apiFind('szproctec', {
           procedure: 'st_con_teacher_se_imgpath',
+          i_idcampus: selectedCampus.ID,
           i_dtver: currentVer,
         });
 
@@ -303,8 +318,10 @@ const ArcSoftInfoScreen = () => {
 
         if (newVersionStr) {
           const newVersionNum = Number(newVersionStr);
-          faceVersionStorage.set(FACE_DTVER_T_KEY, newVersionNum);
-          setFaceDtVerT(newVersionNum);
+          faceVersionStorage.set(
+            `${FACE_DTVER_T_KEY_PREFIX}${selectedCampus.ID}`,
+            newVersionNum
+          );
         }
       } catch (error) {
         const errMsg = (error as Error).message;
@@ -312,12 +329,13 @@ const ArcSoftInfoScreen = () => {
         showToast(`同步教师人脸失败: ${errMsg}`);
       }
     },
-    [showToast]
+    [showToast, selectedCampus]
   );
 
   const initfaceImg = useCallback(
     async (currentVer: number, currentVerT: number) => {
-      console.log('开始初始化人脸库 (InspireFace 会话模式)...');
+      if (!selectedCampus) return;
+      console.log(`开始为校区 ${selectedCampus.VCNAME} 初始化人脸库...`);
       setIsBeginFace(false);
 
       try {
@@ -338,94 +356,89 @@ const ArcSoftInfoScreen = () => {
         showToast(`初始化人脸库失败: ${errMsg}`);
       }
     },
-    [findStudentImg, findTeacherImg, showToast]
+    [findStudentImg, findTeacherImg, showToast, selectedCampus]
   );
 
   const loadInitImg = async () => {
+    if (!selectedCampus) {
+      showToast('请先选择一个校区');
+      return;
+    }
     console.log('手动触发“重新载入照片”...');
     showToast('正在重新加载所有人脸数据...');
     await initfaceImg(0, 0);
   };
 
+  const fetchCampusList = async () => {
+    try {
+      const currentUser = getCurrentUser();
+      if (!currentUser) return;
+      const res = await apiFind('szproctec', {
+        procedure: 'st_con_campus_select', // 更新接口名称
+        i_idopr: currentUser.ID,
+        i_vcpym: '', // 添加参数
+        i_isenable: 1, // 添加参数
+      });
+      // 假设返回的数据在 res.data['#result-set-1']
+      const dataKey = '#result-set-1';
+      if (res && res.data && res.data[dataKey]) {
+        const campuses: Campus[] = res.data[dataKey];
+        setCampusList(campuses);
+        // 设置默认校区
+        const defaultCampus =
+          campuses.find((c) => c.ID === currentUser.ID) || campuses[0];
+        if (defaultCampus) {
+          setSelectedCampus(defaultCampus);
+        }
+      }
+    } catch (error) {
+      console.error('获取校区列表失败:', error);
+      showToast('获取校区列表失败');
+    }
+  };
+
+  // 组件首次加载时获取校区列表
   useEffect(() => {
     sessionRef.current = InspireFace.createSession(
       { enableRecognition: true },
       DetectMode.ALWAYS_DETECT,
-      1,
-      -1,
-      -1
+      1, -1, -1
     );
     console.log('InspireFace 会话已创建。');
 
-    const loadScreenData = async () => {
-      await findInfo();
-
-      try {
-        const savedParamsString =
-          recognitionStorage.getString(RECOGNITION_PARAMS_KEY);
-        if (savedParamsString) {
-          const savedParams = JSON.parse(savedParamsString);
-          setFaceScore(savedParams.faceScore);
-          setFaceQuality(savedParams.faceQuality);
-          setIsFront(savedParams.isFront);
-          setIsLiveness(savedParams.isLiveness);
-          setFacePreviewSize(savedParams.facePreviewSize);
-        }
-      } catch (error) {
-        console.error('从 MMKV 加载参数失败:', error);
-      } finally {
-        setParamsInitialized(true);
-      }
-
-      const storedFaceDtVer = faceVersionStorage.getNumber(FACE_DTVER_KEY) || 0;
-      const storedFaceDtVerT =
-        faceVersionStorage.getNumber(FACE_DTVER_T_KEY) || 0;
-
-      const params = { idtype: 4, vccoursetype: '晚托', vcschool: '实验小学' };
-      setIdtype(params.idtype);
-      if (params.idtype === 1) {
-        setTypetext(`校门口刷脸:${params.vccoursetype} [${params.vcschool}]`);
-      } else if (params.idtype === 4) {
-        setTypetext('托管刷脸：按时间段区分午托晚托');
-      }
-
-      setMsg('1');
-      await initfaceImg(storedFaceDtVer, storedFaceDtVerT);
-    };
-
-    loadScreenData();
+    fetchCampusList();
 
     return () => {
       console.log('清理 InspireFace 会话。');
       sessionRef.current?.dispose();
       sessionRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initfaceImg]);
+  }, []);
 
+  // 当校区变化时，触发人脸数据加载
   useEffect(() => {
-    if (!paramsInitialized) return;
-    const paramsToSave = {
-      faceScore,
-      faceQuality,
-      isFront,
-      isLiveness,
-      facePreviewSize,
-    };
-    recognitionStorage.set(RECOGNITION_PARAMS_KEY, JSON.stringify(paramsToSave));
-  }, [
-    isFront,
-    isLiveness,
-    faceScore,
-    faceQuality,
-    facePreviewSize,
-    paramsInitialized,
-  ]);
+    if (selectedCampus) {
+      console.log(`校区已切换至: ${selectedCampus.VCNAME}`);
+      const studentVer =
+        faceVersionStorage.getNumber(
+          `${FACE_DTVER_KEY_PREFIX}${selectedCampus.ID}`
+        ) || 0;
+      const teacherVer =
+        faceVersionStorage.getNumber(
+          `${FACE_DTVER_T_KEY_PREFIX}${selectedCampus.ID}`
+        ) || 0;
+      initfaceImg(studentVer, teacherVer);
+    }
+  }, [selectedCampus, initfaceImg]);
 
   const findInfo = async () => {
     try {
+      const currentUser = getCurrentUser();
+      if (!currentUser) return;
+
       const res = await apiFind('szproctec', {
         procedure: 'st_pfm_config_face_se_init',
+        i_idopr: currentUser.ID,
       });
       if (res?.data) {
         const resultSet1 = res.data['#result-set-1'];
@@ -459,9 +472,24 @@ const ArcSoftInfoScreen = () => {
     }
   };
 
+  const handleSelectCampus = (campus: Campus) => {
+    setSelectedCampus(campus);
+    setCampusModalVisible(false);
+  };
+
   return (
-    <View style={{ flex: 1 }}>
+    <SafeAreaView style={{ flex: 1 }}>
       <ScrollView style={styles.container}>
+        <TouchableOpacity
+          style={styles.campusSelector}
+          onPress={() => setCampusModalVisible(true)}
+        >
+          <Text style={styles.campusSelectorText}>
+            当前校区: {selectedCampus ? selectedCampus.VCNAME : '请选择'}
+          </Text>
+          <Text>▼</Text>
+        </TouchableOpacity>
+
         <View style={styles.card}>
           <View style={styles.cardTop}>
             <Text>{typetext}</Text>
@@ -573,7 +601,32 @@ const ArcSoftInfoScreen = () => {
           <Text style={styles.buttonText}>开始刷脸</Text>
         </TouchableOpacity>
       </View>
-    </View>
+
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={isCampusModalVisible}
+        onRequestClose={() => setCampusModalVisible(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <FlatList
+              data={campusList}
+              keyExtractor={(item) => item.ID.toString()}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={styles.modalItem}
+                  onPress={() => handleSelectCampus(item)}
+                >
+                  <Text style={styles.modalItemText}>{item.VCNAME}</Text>
+                </TouchableOpacity>
+              )}
+            />
+            <Button title="关闭" onPress={() => setCampusModalVisible(false)} />
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
   );
 };
 
@@ -581,6 +634,21 @@ const styles = StyleSheet.create({
   container: {
     padding: 15,
     marginBottom: 100,
+  },
+  campusSelector: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    padding: 15,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    marginBottom: 20,
+  },
+  campusSelectorText: {
+    fontSize: 16,
+    fontWeight: '500',
   },
   card: {
     backgroundColor: '#FFFFFF',
@@ -618,7 +686,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-
   input: {
     flex: 1,
     borderWidth: 1,
@@ -664,6 +731,29 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
+  },
+  // Modal styles
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 10,
+    padding: 20,
+    width: '80%',
+    maxHeight: '60%',
+  },
+  modalItem: {
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eee',
+  },
+  modalItemText: {
+    fontSize: 18,
+    textAlign: 'center',
   },
 });
 
