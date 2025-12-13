@@ -14,10 +14,12 @@ import {
   Modal,
   FlatList,
   SafeAreaView,
+  ActivityIndicator,
 } from 'react-native';
 import { MMKV } from 'react-native-mmkv';
 import Slider from '@react-native-community/slider';
 import RNFS from 'react-native-fs';
+import Clipboard from '@react-native-clipboard/clipboard';
 import { apiFind } from './api';
 import {
   InspireFace,
@@ -44,10 +46,10 @@ type ArcSoftInfoScreenNavigationProp = NativeStackNavigationProp<
   'ArcSoftInfo'
 >;
 
-interface Campus {
-  ID: number;
-  VCNAME: string;
-}
+type LogEntry = {
+  text: string;
+  type: 'log' | 'error' | 'success';
+};
 // #endregion
 
 // #region MMKV and InspireFace Initialization
@@ -79,8 +81,9 @@ try {
 // #endregion
 
 const RECOGNITION_PARAMS_KEY = 'recognition_params';
-const FACE_DTVER_KEY_PREFIX = 'FACE_DTVER_';
-const FACE_DTVER_T_KEY_PREFIX = 'FACE_DTVER_T_';
+
+// Helper to force UI update
+const yieldToMain = () => new Promise(resolve => setTimeout(resolve, 0));
 
 const ArcSoftInfoScreen = () => {
   const navigation = useNavigation<ArcSoftInfoScreenNavigationProp>();
@@ -91,6 +94,15 @@ const ArcSoftInfoScreen = () => {
   const [campusList, setCampusList] = useState<Campus[]>([]);
   const [selectedCampus, setSelectedCampus] = useState<Campus | null>(null);
   const [isCampusModalVisible, setCampusModalVisible] = useState(false);
+
+  // 进度条相关状态
+  const [isProgressVisible, setProgressVisible] = useState(false);
+  const [progressTotal, setProgressTotal] = useState(0);
+  const [progressCurrent, setProgressCurrent] = useState(0);
+  const [progressMessage, setProgressMessage] = useState('');
+  const [progressLog, setProgressLog] = useState<LogEntry[]>([]);
+  const [isProgressComplete, setProgressComplete] = useState(false);
+  const progressScrollViewRef = useRef<ScrollView>(null);
 
   const [isFront, setIsFront] = useState(true);
   const [isLiveness, setIsLiveness] = useState(true);
@@ -107,10 +119,10 @@ const ArcSoftInfoScreen = () => {
 
   const extractFeatureFromUrlSession = async (
     imageUrl: string,
-    session: InspireFaceSession
+    session: InspireFaceSession,
+    onProgress: (detail: string, type?: LogEntry['type']) => Promise<void>
   ): Promise<ArrayBuffer | null> => {
     if (!imageUrl || !session) {
-      console.warn(`[特征提取] URL或会话无效: URL=${imageUrl}, Session=${session}`);
       return null;
     }
     const tempFilePath = `${
@@ -119,42 +131,41 @@ const ArcSoftInfoScreen = () => {
     let bitmap = null;
     let imageStream = null;
     try {
-      console.log(`[特征提取] 1/5: 开始下载图片: ${imageUrl}`);
+      await onProgress('正在下载图片...');
       const download = await RNFS.downloadFile({
         fromUrl: imageUrl,
         toFile: tempFilePath,
       }).promise;
       if (download.statusCode !== 200) {
-        console.error(`[特征提取] 1/5: 下载图片失败: ${imageUrl}, 状态码: ${download.statusCode}`);
+        await onProgress('图片下载失败', 'error');
         return null;
       }
-      console.log(`[特征提取] 2/5: 图片下载成功到: ${tempFilePath}`);
 
+      await onProgress('正在创建图像流...');
       bitmap = InspireFace.createImageBitmapFromFilePath(3, tempFilePath);
       imageStream = InspireFace.createImageStreamFromBitmap(
         bitmap,
         CameraRotation.ROTATION_0
       );
       imageStream.setFormat(ImageFormat.BGR);
-      console.log(`[特征提取] 3/5: 位图和图像流创建成功`);
 
+      await onProgress('正在检测人脸...');
       const faceInfos = session.executeFaceTrack(imageStream);
       if (faceInfos.length > 0 && faceInfos[0]) {
-        console.log(`[特征提取] 4/5: 检测到人脸，开始提取特征`);
+        await onProgress('正在提取特征...');
         return session.extractFaceFeature(imageStream, faceInfos[0].token);
       }
-      console.log(`[特征提取] 4/5: 在图片中未检测到人脸: ${imageUrl}`);
+      await onProgress('未检测到人脸', 'error');
       return null;
     } catch (error) {
-      console.error(`[特征提取] 5/5: 处理图片时出错 ${imageUrl}:`, error);
+      const errMsg = (error as Error).message;
+      await onProgress(`处理图片时出错: ${errMsg}`, 'error');
+      console.error(`处理图片时出错 ${imageUrl}:`, error);
       return null;
     } finally {
       imageStream?.dispose();
       bitmap?.dispose();
-      RNFS.unlink(tempFilePath).catch((err) =>
-        console.error('删除临时文件失败', err)
-      );
-      console.log(`[特征提取] 5/5: 资源已清理 for ${imageUrl}`);
+      RNFS.unlink(tempFilePath).catch(() => {});
     }
   };
 
@@ -166,226 +177,161 @@ const ArcSoftInfoScreen = () => {
     }
   }, []);
 
-  const findStudentImg = useCallback(
-    async (currentVer: number) => {
-      if (!sessionRef.current || !selectedCampus) {
-        showToast('人脸识别会话或校区未初始化');
-        return;
-      }
-      try {
-        const res = await apiFind('szproctec', {
-          procedure: 'st_con_student_se_imgpath',
-          i_idcampus: selectedCampus.ID,
-          i_dtver: currentVer,
-        });
-
-        const toDelete = res.data?.['#result-set-1'] || [];
-        const newVersionStr = res.data?.['#result-set-2']?.[0]?.DTVER;
-        const toRegister = res.data?.['#result-set-3'] || [];
-
-        // 增量删除
-        for (const student of toDelete) {
-          const userName = `${student.ID}_${student.VCNAME}`;
-          const hubId = faceIdMappingStorage.getNumber(userName);
-          if (hubId) {
-            console.log(`[学生删除] 删除用户: ${userName}, Hub ID: ${hubId}`);
-            await InspireFace.featureHubFaceRemove(hubId);
-            faceIdMappingStorage.delete(userName);
-            userInfoCacheStorage.delete(userName);
-          }
-        }
-
-        // 注册
-        console.log(`[学生注册] 需要注册 ${toRegister.length} 个人脸...`);
-        for (const student of toRegister) {
-          const userName = `${student.ID}_${student.VCNAME}`;
-          console.log(`[学生注册] 开始处理用户: ${userName}, 图片: ${student.VCIMGPATH}`);
-          const feature = await extractFeatureFromUrlSession(
-            student.VCIMGPATH,
-            sessionRef.current
-          );
-          if (feature) {
-            console.log(`[学生注册] 特征提取成功 for ${userName}`);
-            const faceId = await InspireFace.featureHubFaceInsert({
-              id: -1,
-              feature,
-            });
-            console.log(`[学生注册] featureHubFaceInsert 结果 for ${userName}:`, faceId);
-            if (faceId && typeof faceId === 'number' && faceId !== -1) {
-              faceIdMappingStorage.set(userName, faceId);
-              userInfoCacheStorage.set(
-                userName,
-                JSON.stringify({
-                  name: student.VCNAME,
-                  imageUrl: student.VCIMGPATH,
-                })
-              );
-              console.log(`[学生注册] ${userName} 注册成功，Hub ID: ${faceId}`);
-            } else {
-              showToast(`${userName} 注册失败: 插入数据库失败`);
-              console.error(`[学生注册] ${userName} 注册失败: 插入数据库失败，结果:`, faceId);
-            }
-          } else {
-            showToast(`无法从照片中提取 ${userName} 的人脸`);
-            console.error(`[学生注册] 无法从照片中提取 ${userName} 的人脸: ${student.VCIMGPATH}`);
-          }
-        }
-
-        if (newVersionStr) {
-          const newVersionNum = Number(newVersionStr);
-          faceVersionStorage.set(
-            `${FACE_DTVER_KEY_PREFIX}${selectedCampus.ID}`,
-            newVersionNum
-          );
-          console.log(`[学生] 版本号更新为: ${newVersionNum}`);
-        }
-      } catch (error) {
-        const errMsg = (error as Error).message;
-        console.error('同步学生人脸失败:', errMsg);
-        showToast(`同步学生人脸失败: ${errMsg}`);
-      }
-    },
-    [showToast, selectedCampus]
-  );
-
-  const findTeacherImg = useCallback(
-    async (currentVer: number) => {
-      if (!sessionRef.current || !selectedCampus) {
-        showToast('人脸识别会话或校区未初始化');
-        return;
-      }
-      try {
-        const res = await apiFind('szproctec', {
-          procedure: 'st_con_teacher_se_imgpath',
-          i_idcampus: selectedCampus.ID,
-          i_dtver: currentVer,
-        });
-
-        const toDelete = res.data?.['#result-set-1'] || [];
-        const newVersionStr = res.data?.['#result-set-2']?.[0]?.DTVER;
-        const toRegister = res.data?.['#result-set-3'] || [];
-
-        // 增量删除
-        for (const teacher of toDelete) {
-          const allTeacherKeys = faceIdMappingStorage
-            .getAllKeys()
-            .filter(
-              (key) =>
-                key.startsWith(`${teacher.ID}_T_`) && key.includes(teacher.VCNAME)
-            );
-          for (const key of allTeacherKeys) {
-            const hubId = faceIdMappingStorage.getNumber(key);
-            if (hubId) {
-              console.log(`[教师删除] 删除用户: ${key}, Hub ID: ${hubId}`);
-              await InspireFace.featureHubFaceRemove(hubId);
-              faceIdMappingStorage.delete(key);
-              userInfoCacheStorage.delete(key);
-            }
-          }
-        }
-
-        // 注册
-        console.log(`[教师注册] 需要注册 ${toRegister.length} 个人脸...`);
-        for (const teacher of toRegister) {
-          const userName = `${teacher.ID}_T_${teacher.VCNAME}`;
-          console.log(`[教师注册] 开始处理用户: ${userName}, 图片: ${teacher.VCIMGPATH}`);
-          const feature = await extractFeatureFromUrlSession(
-            teacher.VCIMGPATH,
-            sessionRef.current
-          );
-          if (feature) {
-            console.log(`[教师注册] 特征提取成功 for ${userName}`);
-            const faceId = await InspireFace.featureHubFaceInsert({
-              id: -1,
-              feature,
-            });
-            console.log(`[教师注册] featureHubFaceInsert 结果 for ${userName}:`, faceId);
-            if (faceId && typeof faceId === 'number' && faceId !== -1) {
-              faceIdMappingStorage.set(userName, faceId);
-              userInfoCacheStorage.set(
-                userName,
-                JSON.stringify({
-                  name: teacher.VCNAME,
-                  imageUrl: teacher.VCIMGPATH,
-                })
-              );
-              console.log(`[教师注册] ${userName} 注册成功，Hub ID: ${faceId}`);
-            } else {
-              showToast(`${userName} 注册失败: 插入数据库失败`);
-              console.error(`[教师注册] ${userName} 注册失败: 插入数据库失败，结果:`, faceId);
-            }
-          } else {
-            showToast(`无法从照片中提取 ${userName} 的人脸`);
-            console.error(`[教师注册] 无法从照片中提取 ${userName} 的人脸: ${teacher.VCIMGPATH}`);
-          }
-        }
-
-        if (newVersionStr) {
-          const newVersionNum = Number(newVersionStr);
-          faceVersionStorage.set(
-            `${FACE_DTVER_T_KEY_PREFIX}${selectedCampus.ID}`,
-            newVersionNum
-          );
-          console.log(`[教师] 版本号更新为: ${newVersionNum}`);
-        }
-      } catch (error) {
-        const errMsg = (error as Error).message;
-        console.error('同步教师人脸失败:', errMsg);
-        showToast(`同步教师人脸失败: ${errMsg}`);
-      }
-    },
-    [showToast, selectedCampus]
-  );
-
-  const initfaceImg = useCallback(
-    async (currentVer: number, currentVerT: number) => {
-      if (!selectedCampus) return;
-      console.log(`开始为校区 ${selectedCampus.VCNAME} 初始化人脸库...`);
-      setIsBeginFace(false);
-
-      try {
-        // 如果是全量更新，则先清空所有数据
-        if (currentVer === 0 && currentVerT === 0) {
-          console.log('执行全量更新，正在清除所有本地人脸数据...');
-          const allKeys = faceIdMappingStorage.getAllKeys();
-          for (const key of allKeys) {
-            const hubId = faceIdMappingStorage.getNumber(key);
-            if (hubId) {
-              await InspireFace.featureHubFaceRemove(hubId);
-            }
-          }
-          faceIdMappingStorage.clearAll();
-          userInfoCacheStorage.clearAll();
-          console.log('已清除所有本地人脸数据和缓存。');
-        }
-
-        await findStudentImg(currentVer);
-        await findTeacherImg(currentVerT);
-
-        const finalUserNames = faceIdMappingStorage.getAllKeys();
-        console.log(`同步完成，最终人脸数量: ${finalUserNames.length}`);
-
-        setIsBeginFace(true);
-        showToast('人脸库已更新');
-      } catch (error) {
-        const errMsg = (error as Error).message;
-        console.error('初始化人脸库时发生严重错误:', errMsg);
-        showToast(`初始化人脸库失败: ${errMsg}`);
-      }
-    },
-    [findStudentImg, findTeacherImg, selectedCampus]
-  );
-
   const loadInitImg = async () => {
     if (!selectedCampus) {
       showToast('请先选择一个校区');
       return;
     }
-    console.log('手动触发“重新载入照片”...');
-    showToast(`正在为校区 [${selectedCampus.VCNAME}] 重新加载所有人脸数据...`);
-    // 传入 0, 0 强制进行全量同步
-    await initfaceImg(0, 0);
+    if (!sessionRef.current) {
+      showToast('人脸识别会话未初始化');
+      return;
+    }
+
+    setIsBeginFace(false);
+    setProgressVisible(true);
+    setProgressLog([]);
+    setProgressComplete(false);
+
+    const updateProgress = async (detail: string, type: LogEntry['type'] = 'log') => {
+      console.log(`[进度] ${detail}`);
+      setProgressLog(prevLog => [...prevLog, { text: detail, type }]);
+      await yieldToMain();
+    };
+
+    await updateProgress('正在计算需要处理的照片数量...');
+
+    try {
+      // 1. 预计算总数
+      const studentRes = await apiFind('szproctec', {
+        procedure: 'st_con_student_se_imgpath',
+        i_idcampus: selectedCampus.ID,
+        i_dtver: 0,
+      });
+      const teacherRes = await apiFind('szproctec', {
+        procedure: 'st_con_teacher_se_imgpath',
+        i_idcampus: selectedCampus.ID,
+        i_dtver: 0,
+      });
+
+      const studentsToRegister = studentRes.data?.['#result-set-3'] || [];
+      const teachersToRegister = teacherRes.data?.['#result-set-3'] || [];
+      const total = studentsToRegister.length + teachersToRegister.length;
+
+      setProgressTotal(total);
+      setProgressCurrent(0);
+
+      if (total === 0) {
+        await updateProgress('没有需要载入的照片。');
+        return;
+      }
+
+      // 2. 清空数据库
+      await updateProgress('正在清空本地数据库...');
+      const allKeys = faceIdMappingStorage.getAllKeys();
+      for (const key of allKeys) {
+        const hubId = faceIdMappingStorage.getNumber(key);
+        if (hubId) {
+          await InspireFace.featureHubFaceRemove(hubId);
+        }
+      }
+      faceIdMappingStorage.clearAll();
+      userInfoCacheStorage.clearAll();
+
+      let currentCount = 0;
+
+      // 3. 注册学生
+      for (const student of studentsToRegister) {
+        currentCount++;
+        setProgressCurrent(currentCount);
+        const userName = `${student.ID}_${student.VCNAME}`;
+        await updateProgress(`处理中: ${userName}`);
+
+        const feature = await extractFeatureFromUrlSession(
+          student.VCIMGPATH,
+          sessionRef.current,
+          updateProgress
+        );
+
+        if (feature) {
+          await updateProgress(`正在为 ${userName} 注册到数据库...`);
+          const faceId = await InspireFace.featureHubFaceInsert({
+            id: -1,
+            feature,
+          });
+          if (typeof faceId === 'number' && faceId !== -1) {
+            await updateProgress(`注册成功，用户: ${userName}, Face ID: ${faceId}`, 'success');
+            faceIdMappingStorage.set(userName, faceId);
+            userInfoCacheStorage.set(
+              userName,
+              JSON.stringify({
+                name: student.VCNAME,
+                imageUrl: student.VCIMGPATH,
+              })
+            );
+          } else {
+            await updateProgress(`${userName} 的数据库插入失败`, 'error');
+          }
+        } else {
+          await updateProgress(`${userName} 的特征提取失败`, 'error');
+        }
+      }
+
+      // 4. 注册教师
+      for (const teacher of teachersToRegister) {
+        currentCount++;
+        setProgressCurrent(currentCount);
+        const userName = `${teacher.ID}_T_${teacher.VCNAME}`;
+        await updateProgress(`处理中: ${userName}`);
+
+        const feature = await extractFeatureFromUrlSession(
+          teacher.VCIMGPATH,
+          sessionRef.current,
+          updateProgress
+        );
+        if (feature) {
+          await updateProgress(`正在为 ${userName} 注册到数据库...`);
+          const faceId = await InspireFace.featureHubFaceInsert({
+            id: -1,
+            feature,
+          });
+          if (typeof faceId === 'number' && faceId !== -1) {
+            await updateProgress(`注册成功，用户: ${userName}, Face ID: ${faceId}`, 'success');
+            faceIdMappingStorage.set(userName, faceId);
+            userInfoCacheStorage.set(
+              userName,
+              JSON.stringify({
+                name: teacher.VCNAME,
+                imageUrl: teacher.VCIMGPATH,
+              })
+            );
+          } else {
+            await updateProgress(`${userName} 的数据库插入失败`, 'error');
+          }
+        } else {
+          await updateProgress(`${userName} 的特征提取失败`, 'error');
+        }
+      }
+
+      await updateProgress('全部处理完成！', 'success');
+    } catch (error) {
+      const errMsg = (error as Error).message;
+      await updateProgress(`发生严重错误: ${errMsg}`, 'error');
+      console.error('重新载入照片失败:', errMsg);
+    } finally {
+      setIsBeginFace(true);
+      setProgressComplete(true);
+    }
   };
+
+  useEffect(() => {
+    setProgressMessage(`共 ${progressTotal} 张，已处理 ${progressCurrent} 张`);
+  }, [progressCurrent, progressTotal]);
+
+  useEffect(() => {
+    if (isProgressVisible) {
+      progressScrollViewRef.current?.scrollToEnd({ animated: true });
+    }
+  }, [progressLog, isProgressVisible]);
 
   const fetchCampusList = async () => {
     try {
@@ -413,25 +359,17 @@ const ArcSoftInfoScreen = () => {
     }
   };
 
-  // 组件首次加载时获取校区列表
   useEffect(() => {
     sessionRef.current = InspireFace.createSession(
       { enableRecognition: true },
       DetectMode.ALWAYS_DETECT,
       1, -1, -1
     );
-    console.log('InspireFace 会话已创建。');
-
     fetchCampusList();
-
     return () => {
-      console.log('清理 InspireFace 会话。');
       sessionRef.current?.dispose();
-      sessionRef.current = null;
     };
   }, []);
-
-  // 移除当校区变化时自动加载的 useEffect
 
   const findInfo = async () => {
     try {
@@ -477,6 +415,12 @@ const ArcSoftInfoScreen = () => {
   const handleSelectCampus = (campus: Campus) => {
     setSelectedCampus(campus);
     setCampusModalVisible(false);
+  };
+
+  const handleCopyLog = () => {
+    const logString = progressLog.map(log => log.text).join('\n');
+    Clipboard.setString(logString);
+    showToast('日志已复制到剪贴板');
   };
 
   return (
@@ -603,6 +547,45 @@ const ArcSoftInfoScreen = () => {
           <Text style={styles.buttonText}>开始刷脸</Text>
         </TouchableOpacity>
       </View>
+
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={isProgressVisible}
+        onRequestClose={() => {}}
+      >
+        <View style={styles.progressModalContainer}>
+          <View style={styles.progressModalContent}>
+            <ActivityIndicator size="large" color="#2fd9b1" />
+            <Text style={styles.progressText}>{progressMessage}</Text>
+            <ScrollView
+              ref={progressScrollViewRef}
+              style={styles.progressLogContainer}
+              nestedScrollEnabled={true}
+            >
+              {progressLog.map((log, index) => (
+                <Text
+                  key={index}
+                  style={[
+                    styles.progressDetailText,
+                    log.type === 'error' && styles.progressErrorText,
+                    log.type === 'success' && styles.progressSuccessText,
+                  ]}
+                >
+                  {log.text}
+                </Text>
+              ))}
+            </ScrollView>
+            {isProgressComplete && (
+              <View style={styles.progressButtonContainer}>
+                <Button title="一键复制" onPress={handleCopyLog} />
+                <View style={{ width: 20 }} />
+                <Button title="关闭" onPress={() => setProgressVisible(false)} />
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         animationType="slide"
@@ -756,6 +739,55 @@ const styles = StyleSheet.create({
   modalItemText: {
     fontSize: 18,
     textAlign: 'center',
+  },
+  // Progress Modal styles
+  progressModalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+  },
+  progressModalContent: {
+    backgroundColor: 'white',
+    borderRadius: 10,
+    padding: 20,
+    width: '90%',
+    maxWidth: 500,
+    alignItems: 'center',
+    elevation: 5,
+  },
+  progressText: {
+    marginTop: 15,
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  progressLogContainer: {
+    marginTop: 10,
+    height: 200, // 固定高度
+    width: '100%',
+    borderColor: '#eee',
+    borderWidth: 1,
+    borderRadius: 5,
+    padding: 10,
+    backgroundColor: '#f9f9f9',
+  },
+  progressDetailText: {
+    fontSize: 12,
+    color: '#333',
+  },
+  progressErrorText: {
+    color: 'red',
+    fontWeight: 'bold',
+  },
+  progressSuccessText: {
+    color: 'green',
+    fontWeight: 'bold',
+  },
+  progressButtonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    width: '100%',
+    marginTop: 20,
   },
 });
 
