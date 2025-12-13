@@ -51,9 +51,24 @@ const ArcSoftInfoScreen = () => {
       const res = await apiFind('szproctec',{
         procedure: 'st_pfm_config_face_se_init',
       });
-      const resultSet = res?.data?.['#result-set-1'];
-      if (resultSet) {
-        setOutDataInfo({ data2: resultSet });
+      if (res?.data) {
+        const resultSet1 = res.data['#result-set-1'];
+        const resultSet2 = res.data['#result-set-2'];
+
+        if (resultSet1 && resultSet1.length > 0) {
+          const config = resultSet1[0];
+          setFaceScore(Number(config.QIFACESCORE));
+          setFaceQuality(Number(config.QIFACEWHILE));
+          // Assuming VCFACENET '1' means front camera, empty or '0' means rear
+          setIsFront(config.VCFACENET === '1');
+          // Assuming ISFACELAST '1' means liveness enabled, '0' means disabled
+          setIsLiveness(config.ISFACELAST === '1');
+          setFacePreviewSize(config.QIFACESIZE);
+        }
+
+        if (resultSet2) {
+          setOutDataInfo({ data2: resultSet2 });
+        }
       }
     } catch (error) {
       Alert.alert('错误', '获取配置信息失败');
@@ -157,7 +172,7 @@ const ArcSoftInfoScreen = () => {
           </View>
           <View style={styles.row}>
             <Text style={styles.label}>分辨率:</Text>
-            <Button title={facePreviewSize || '选择分辨率'} onPress={getSize} />
+            <Text>{facePreviewSize || '未设置'}</Text>
           </View>
           <View style={styles.row}>
             <Text style={styles.label}>设备状态:</Text>
