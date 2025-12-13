@@ -12,7 +12,7 @@ import {
   ImageBackground,
 } from 'react-native';
 import { MMKV } from 'react-native-mmkv';
-import { config } from './config';
+import { apiFind,apiLogin } from './api';
 
 interface LoginScreenProps {
   onLoginSuccess: (userData: any) => void;
@@ -28,39 +28,6 @@ const STORAGE_KEYS = {
   USER_PASSWORD: 'user_password',
   CURRENT_USER: 'current_user',
 };
-
-const apiFind = async (func: string, params: Record<string, any>) => {
-  const baseUrl = `${config.baseUrl}?func=${func}`;
-
-  const formData = new FormData();
-  for (const key in params) {
-    if (Object.prototype.hasOwnProperty.call(params, key)) {
-      formData.append(key, params[key]);
-    }
-  }
-
-  console.log('POST Request Body:', formData);
-
-  try {
-    const response = await fetch(baseUrl, {
-      method: 'POST',
-      body: formData,
-    });
-    console.log('API Response:', response);
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const result = await response.json();
-    console.log('API Response:', JSON.stringify(result, null, 2));
-    return result;
-  } catch (error) {
-    console.error('API request failed:', error);
-    throw error;
-  }
-};
-
 
 const { width, height } = Dimensions.get('window');
 const rpx = (px: number) => (width / 750) * px;
@@ -111,7 +78,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     }
 
     try {
-      const response: any = await apiFind('tecloginbyphone', {
+      const response: any = await apiLogin('tecloginbyphone',{
         funcapi: 'tecloginbyphone',
         procedure: '',
         I_VCPHONE: phone,
