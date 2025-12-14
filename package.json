@@ -192,6 +192,7 @@
     "version": "0.48.6"
   },
   "dependencies": {
-    "react-native-reanimated": "^3.x.x"
+    "react-native-reanimated": "^3.x.x",
+    "react-native-worklets-core": "^1.5.0"
   }
 }
