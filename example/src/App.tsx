@@ -5,6 +5,8 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import LoginScreen from './LoginScreen';
 import ArcSoftInfoScreen from './ArcSoftInfoScreen';
 import RegisteredFacesScreen from './RegisteredFacesScreen';
+// 导入新的 FaceRecognitionScreen
+import FaceRecognitionScreen from './FaceRecognitionScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -26,6 +28,12 @@ export default function App() {
           name="RegisteredFaces"
           component={RegisteredFacesScreen}
           options={{ title: '已注册的人脸' }}
+        />
+        {/* 添加新的 FaceRecognitionScreen */}
+        <Stack.Screen
+          name="FaceRecognition"
+          component={FaceRecognitionScreen}
+          options={{ title: '人脸识别' }}
         />
       </Stack.Navigator>
     </NavigationContainer>

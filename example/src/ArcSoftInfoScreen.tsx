@@ -39,6 +39,14 @@ type RootStackParamList = {
   Login: undefined;
   ArcSoftInfo: undefined;
   RegisteredFaces: undefined;
+  // 添加新的 FaceRecognition 路由及其参数
+  FaceRecognition: {
+    isFront: boolean;
+    isLiveness: boolean;
+    faceScore: number;
+    faceQuality: number;
+    facePreviewSize: string;
+  };
 };
 
 type ArcSoftInfoScreenNavigationProp = NativeStackNavigationProp<
@@ -71,7 +79,7 @@ try {
   InspireFace.featureHubDataEnable({
     enablePersistence: true,
     persistenceDbPath: 'inspireface.db',
-    searchThreshold: 0.42,
+    searchThreshold: 0.42, // 默认搜索阈值
     searchMode: SearchMode.EXHAUSTIVE,
     primaryKeyMode: PrimaryKeyMode.AUTO_INCREMENT,
   });
@@ -114,7 +122,7 @@ const ArcSoftInfoScreen = () => {
   const [facePreviewSize, setFacePreviewSize] = useState('');
 
   const [msg, setMsg] = useState('1');
-  const [isBeginFace, setIsBeginFace] = useState(false);
+  const [isBeginFace, setIsBeginFace] = useState(false); // 控制“开始刷脸”按钮是否可用
   const [idtype, setIdtype] = useState(0);
   const [paramsInitialized, setParamsInitialized] = useState(false);
 
@@ -190,7 +198,7 @@ const ArcSoftInfoScreen = () => {
       return;
     }
 
-    setIsBeginFace(false);
+    setIsBeginFace(false); // 开始加载时禁用“开始刷脸”按钮
     setProgressVisible(true);
     setProgressLog([]);
     setProgressComplete(false);
@@ -330,7 +338,7 @@ const ArcSoftInfoScreen = () => {
       const endTime = performance.now();
       const duration = (endTime - startTime) / 1000;
       setElapsedTime(`耗时: ${duration.toFixed(2)} 秒`);
-      setIsBeginFace(true);
+      setIsBeginFace(true); // 加载完成后启用“开始刷脸”按钮
       setProgressComplete(true);
       setIsSuccess(wasSuccessful);
     }
@@ -438,6 +446,17 @@ const ArcSoftInfoScreen = () => {
     const logString = progressLog.map(log => `[${log.type.toUpperCase()}] ${log.text}`).join('\n');
     Clipboard.setString(logString);
     showToast('日志已复制到剪贴板');
+  };
+
+  // 处理“开始刷脸”按钮点击事件
+  const handleStartFaceRecognition = () => {
+    navigation.navigate('FaceRecognition', {
+      isFront,
+      isLiveness,
+      faceScore,
+      faceQuality,
+      facePreviewSize,
+    });
   };
 
   return (
@@ -560,6 +579,7 @@ const ArcSoftInfoScreen = () => {
             { backgroundColor: isBeginFace ? '#2fd9b1' : '#999999' },
           ]}
           disabled={!isBeginFace}
+          onPress={handleStartFaceRecognition} // 添加点击事件
         >
           <Text style={styles.buttonText}>开始刷脸</Text>
         </TouchableOpacity>
