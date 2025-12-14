@@ -9,7 +9,7 @@ import {
   Platform,
   ToastAndroid,
 } from 'react-native';
-import { useCameraDevices, Camera, FrameProcessorPlugin } from 'react-native-vision-camera';
+import { useCameraDevices, Camera, FrameProcessorPlugin, CameraPermissionStatus } from 'react-native-vision-camera'; // 导入 CameraPermissionStatus
 import {
   InspireFace,
   DetectMode,
@@ -66,7 +66,10 @@ const FaceRecognitionScreen: React.FC<FaceRecognitionScreenProps> = ({ route }) 
   const { isFront, isLiveness, faceScore, faceQuality, facePreviewSize } = route.params;
 
   const devices = useCameraDevices();
-  const cameraDevice = isFront ? devices.front : devices.back;
+  console.log('Available camera devices:', devices); // 取消注释
+  // 修改 cameraDevice 的获取方式
+  const cameraDevice = isFront ? devices.find((d) => d.position === 'front') : devices.find((d) => d.position === 'back');
+  console.log('Selected camera device:', cameraDevice); // 取消注释
   const isFocused = useIsFocused();
   const cameraRef = useRef<Camera>(null);
 
@@ -74,20 +77,24 @@ const FaceRecognitionScreen: React.FC<FaceRecognitionScreenProps> = ({ route }) 
   const [detectedFaces, setDetectedFaces] = useState<FaceInfo[]>([]);
   const [recognizedPerson, setRecognizedPerson] = useState<{ name: string; imageUrl: string } | null>(null);
   const [cameraInitialized, setCameraInitialized] = useState(false);
+  // 修改状态类型为 CameraPermissionStatus
+  const [cameraPermissionStatus, setCameraPermissionStatus] = useState<CameraPermissionStatus>('not-determined');
 
   // 权限检查
   useEffect(() => {
-    async function getPermission() {
-      const cameraPermission = await Camera.getCameraPermissionStatus();
-      if (cameraPermission !== 'authorized') {
-        const newCameraPermission = await Camera.requestCameraPermission();
-        if (newCameraPermission !== 'authorized') {
+    // 直接请求相机权限
+    Camera.requestCameraPermission()
+      .then(newStatus => {
+        setCameraPermissionStatus(newStatus);
+        if (newStatus !== 'granted') { // 检查是否为 'granted'
           Alert.alert('需要相机权限', '请在设置中授予相机权限以使用人脸识别功能。');
         }
-      }
-    }
-    getPermission();
-  }, []);
+      })
+      .catch(error => {
+        console.error('请求相机权限失败:', error);
+        Alert.alert('错误', '请求相机权限失败。');
+      });
+  }, []); // 空数组表示只在组件挂载时运行一次
 
   // InspireFace 会话初始化和清理
   useEffect(() => {
@@ -163,8 +170,17 @@ const FaceRecognitionScreen: React.FC<FaceRecognitionScreenProps> = ({ route }) 
     }
   }, [faceScore]); // 依赖 faceScore，当其改变时重新创建 worklet
 
+  // 根据权限状态和设备可用性渲染
+  if (cameraPermissionStatus === 'not-determined') {
+    return <Text style={{ margin: 20, textAlign: 'center' }}>正在请求相机权限...</Text>;
+  }
+
+  if (cameraPermissionStatus !== 'granted') { // 检查是否为 'granted'
+    return <Text style={{ margin: 20, textAlign: 'center' }}>相机权限已被拒绝，无法使用人脸识别功能。</Text>;
+  }
+
   if (cameraDevice == null) {
-    return <Text>相机设备不可用</Text>;
+    return <Text style={{ margin: 20, textAlign: 'center' }}>相机设备不可用</Text>;
   }
 
   return (

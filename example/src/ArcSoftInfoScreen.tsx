@@ -578,7 +578,6 @@ const ArcSoftInfoScreen = () => {
             styles.bottomButton,
             { backgroundColor: isBeginFace ? '#2fd9b1' : '#999999' },
           ]}
-          disabled={!isBeginFace}
           onPress={handleStartFaceRecognition} // 添加点击事件
         >
           <Text style={styles.buttonText}>开始刷脸</Text>
