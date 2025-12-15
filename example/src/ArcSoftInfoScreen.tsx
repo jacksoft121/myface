@@ -58,6 +58,20 @@ type LogEntry = {
   text: string;
   type: 'log' | 'error' | 'success';
 };
+
+type Campus = {
+  ID: number;
+  VCNAME: string;
+  // ... 其他 Campus 属性
+};
+
+type RecognitionParams = {
+  isFront: boolean;
+  isLiveness: boolean;
+  faceScore: number;
+  faceQuality: number;
+  facePreviewSize: string;
+};
 // #endregion
 
 // #region MMKV and InspireFace Initialization
@@ -115,18 +129,59 @@ const ArcSoftInfoScreen = () => {
   const [elapsedTime, setElapsedTime] = useState(''); // 新增：用于存储总耗时
   const progressScrollViewRef = useRef<ScrollView>(null);
 
-  const [isFront, setIsFront] = useState(true);
-  const [isLiveness, setIsLiveness] = useState(true);
-  const [faceScore, setFaceScore] = useState(70);
-  const [faceQuality, setFaceQuality] = useState(70);
-  const [facePreviewSize, setFacePreviewSize] = useState('');
+  // 加载初始识别参数
+  const loadInitialRecognitionParams = useCallback((): RecognitionParams => {
+    const storedParams = recognitionStorage.getString(RECOGNITION_PARAMS_KEY);
+    if (storedParams) {
+      try {
+        const parsedParams = JSON.parse(storedParams);
+        return {
+          isFront: parsedParams.isFront ?? true,
+          isLiveness: parsedParams.isLiveness ?? true,
+          faceScore: parsedParams.faceScore ?? 70,
+          faceQuality: parsedParams.faceQuality ?? 70,
+          facePreviewSize: parsedParams.facePreviewSize ?? '',
+        };
+      } catch (e) {
+        console.error('Failed to parse recognition params from MMKV', e);
+      }
+    }
+    // 默认值
+    return {
+      isFront: true,
+      isLiveness: true,
+      faceScore: 70,
+      faceQuality: 70,
+      facePreviewSize: '',
+    };
+  }, []);
+
+  const initialRecognitionParams = loadInitialRecognitionParams();
+
+  const [isFront, setIsFront] = useState<boolean>(initialRecognitionParams.isFront);
+  const [isLiveness, setIsLiveness] = useState<boolean>(initialRecognitionParams.isLiveness);
+  const [faceScore, setFaceScore] = useState<number>(initialRecognitionParams.faceScore);
+  const [faceQuality, setFaceQuality] = useState<number>(initialRecognitionParams.faceQuality);
+  const [facePreviewSize, setFacePreviewSize] = useState<string>(initialRecognitionParams.facePreviewSize);
 
   const [msg, setMsg] = useState('1');
   const [isBeginFace, setIsBeginFace] = useState(false); // 控制“开始刷脸”按钮是否可用
   const [idtype, setIdtype] = useState(0);
-  const [paramsInitialized, setParamsInitialized] = useState(false);
 
   const sessionRef = useRef<InspireFaceSession | null>(null);
+
+  // 当识别参数变化时，保存到 MMKV
+  useEffect(() => {
+    const paramsToSave: RecognitionParams = {
+      isFront,
+      isLiveness,
+      faceScore,
+      faceQuality,
+      facePreviewSize,
+    };
+    recognitionStorage.set(RECOGNITION_PARAMS_KEY, JSON.stringify(paramsToSave));
+  }, [isFront, isLiveness, faceScore, faceQuality, facePreviewSize]);
+
 
   const extractFeatureFromUrlSession = async (
     imageUrl: string,
@@ -391,6 +446,7 @@ const ArcSoftInfoScreen = () => {
       1, -1, -1
     );
     fetchCampusList();
+    findInfo();
     return () => {
       sessionRef.current?.dispose();
     };
@@ -410,26 +466,23 @@ const ArcSoftInfoScreen = () => {
         const resultSet2 = res.data['#result-set-2'];
         if (resultSet2) setOutDataInfo({ data2: resultSet2 });
 
-        const hasCachedParams =
-          recognitionStorage.contains(RECOGNITION_PARAMS_KEY);
+        // 如果 MMKV 中没有缓存参数，则从 API 获取并设置状态，同时保存到 MMKV
+        const hasCachedParams = recognitionStorage.contains(RECOGNITION_PARAMS_KEY);
         if (!hasCachedParams && resultSet1 && resultSet1.length > 0) {
           const config = resultSet1[0];
-          const apiParams = {
+          const apiParams: RecognitionParams = {
             faceScore: Number(config.QIFACESCORE) || 70,
             faceQuality: Number(config.QIFACEWHILE) || 70,
             isFront: config.VCFACENET === '1',
             isLiveness: config.ISFACELAST === '1',
             facePreviewSize: config.QIFACESIZE || '',
           };
+          // 更新状态，这将触发上面的 useEffect 自动保存到 MMKV
           setFaceScore(apiParams.faceScore);
           setFaceQuality(apiParams.faceQuality);
           setIsFront(apiParams.isFront);
           setIsLiveness(apiParams.isLiveness);
           setFacePreviewSize(apiParams.facePreviewSize);
-          recognitionStorage.set(
-            RECOGNITION_PARAMS_KEY,
-            JSON.stringify(apiParams)
-          );
         }
       }
     } catch (error) {
@@ -450,6 +503,7 @@ const ArcSoftInfoScreen = () => {
 
   // 处理“开始刷脸”按钮点击事件
   const handleStartFaceRecognition = () => {
+    // 导航时传递当前状态中的参数
     navigation.navigate('FaceRecognition', {
       isFront,
       isLiveness,

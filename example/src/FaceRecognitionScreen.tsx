@@ -9,21 +9,19 @@ import {
   Platform,
   ToastAndroid,
 } from 'react-native';
-import { useCameraDevices, Camera, FrameProcessorPlugin, CameraPermissionStatus } from 'react-native-vision-camera'; // 导入 CameraPermissionStatus
+import { useCameraDevices, Camera, CameraPermissionStatus } from 'react-native-vision-camera';
 import {
   InspireFace,
   DetectMode,
   type InspireFaceSession,
   type FaceInfo,
-  type FaceFeature,
-  type SearchResult,
   CameraRotation,
   ImageFormat,
 } from 'react-native-nitro-inspire-face';
 import { useIsFocused } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { MMKV } from 'react-native-mmkv';
-import { runOnJS } from 'react-native-reanimated'; // 导入 runOnJS
+import { runOnJS } from 'react-native-reanimated';
 
 // 定义导航栈的参数类型
 type RootStackParamList = {
@@ -46,12 +44,17 @@ type FaceRecognitionScreenProps = NativeStackScreenProps<
 
 const { width, height } = Dimensions.get('window');
 
+const recognitionStorage = new MMKV({
+  id: 'recognition-params-storage',
+});
 const faceIdMappingStorage = new MMKV({
   id: 'face-id-mapping-storage',
 });
 const userInfoCacheStorage = new MMKV({
   id: 'user-info-cache-storage',
 });
+
+const RECOGNITION_PARAMS_KEY = 'recognition_params';
 
 // 辅助函数，用于显示Toast或Alert
 const showToast = (message: string) => {
@@ -63,13 +66,30 @@ const showToast = (message: string) => {
 };
 
 const FaceRecognitionScreen: React.FC<FaceRecognitionScreenProps> = ({ route }) => {
-  const { isFront, isLiveness, faceScore, faceQuality, facePreviewSize } = route.params;
+  // 从 MMKV 中获取相机配置，如果不存在则使用路由参数的默认值
+  const getInitialRecognitionParams = () => {
+    const storedParams = recognitionStorage.getString(RECOGNITION_PARAMS_KEY);
+    if (storedParams) {
+      try {
+        return JSON.parse(storedParams);
+      } catch (e) {
+        console.error('Failed to parse recognition params from MMKV', e);
+        return route.params;
+      }
+    }
+    return route.params;
+  };
+
+  const initialParams = getInitialRecognitionParams();
+
+  const [isFront, setIsFront] = useState(initialParams.isFront);
+  const [isLiveness, setIsLiveness] = useState(initialParams.isLiveness);
+  const [faceScore, setFaceScore] = useState(initialParams.faceScore);
+  const [faceQuality, setFaceQuality] = useState(initialParams.faceQuality);
+  const [facePreviewSize, setFacePreviewSize] = useState(initialParams.facePreviewSize);
 
   const devices = useCameraDevices();
-  console.log('Available camera devices:', devices); // 取消注释
-  // 修改 cameraDevice 的获取方式
   const cameraDevice = isFront ? devices.find((d) => d.position === 'front') : devices.find((d) => d.position === 'back');
-  console.log('Selected camera device:', cameraDevice); // 取消注释
   const isFocused = useIsFocused();
   const cameraRef = useRef<Camera>(null);
 
@@ -77,16 +97,14 @@ const FaceRecognitionScreen: React.FC<FaceRecognitionScreenProps> = ({ route }) 
   const [detectedFaces, setDetectedFaces] = useState<FaceInfo[]>([]);
   const [recognizedPerson, setRecognizedPerson] = useState<{ name: string; imageUrl: string } | null>(null);
   const [cameraInitialized, setCameraInitialized] = useState(false);
-  // 修改状态类型为 CameraPermissionStatus
   const [cameraPermissionStatus, setCameraPermissionStatus] = useState<CameraPermissionStatus>('not-determined');
 
   // 权限检查
   useEffect(() => {
-    // 直接请求相机权限
     Camera.requestCameraPermission()
       .then(newStatus => {
         setCameraPermissionStatus(newStatus);
-        if (newStatus !== 'granted') { // 检查是否为 'granted'
+        if (newStatus !== 'granted') {
           Alert.alert('需要相机权限', '请在设置中授予相机权限以使用人脸识别功能。');
         }
       })
@@ -94,7 +112,7 @@ const FaceRecognitionScreen: React.FC<FaceRecognitionScreenProps> = ({ route }) 
         console.error('请求相机权限失败:', error);
         Alert.alert('错误', '请求相机权限失败。');
       });
-  }, []); // 空数组表示只在组件挂载时运行一次
+  }, []);
 
   // InspireFace 会话初始化和清理
   useEffect(() => {
@@ -117,71 +135,26 @@ const FaceRecognitionScreen: React.FC<FaceRecognitionScreenProps> = ({ route }) 
     };
   }, []);
 
-  // Frame Processor
-  const frameProcessor = useCallback((frame: any) => {
+  // Frame Processor (移除 useCallback 用于排查问题)
+  const frameProcessor = (frame: any) => {
     'worklet';
-    if (!sessionRef.current) {
-      return;
-    }
+    console.log('Worklet frameProcessor called.');
+  };
 
-    try {
-      // 创建图像流
-      const imageStream = InspireFace.createImageStreamFromCameraFrame(
-        frame,
-        CameraRotation.ROTATION_0 // 假设相机帧已经是正确方向
-      );
-      imageStream.setFormat(ImageFormat.NV21); // VisionCamera 默认输出 NV21
-
-      // 执行人脸检测
-      const faces = sessionRef.current.executeFaceTrack(imageStream);
-      runOnJS(setDetectedFaces)(faces); // 更新检测到的人脸
-
-      // 如果检测到人脸，尝试进行识别
-      if (faces.length > 0 && faces[0]) {
-        const faceFeature = sessionRef.current.extractFaceFeature(imageStream, faces[0].token);
-        if (faceFeature) {
-          const searchResult = sessionRef.current.featureHubFaceSearch(faceFeature);
-          if (searchResult && searchResult.length > 0 && searchResult[0].score >= faceScore / 100) {
-            const bestMatch = searchResult[0];
-            // 从 MMKV 中查找用户信息
-            const allKeys = faceIdMappingStorage.getAllKeys();
-            let foundPerson = null;
-            for (const key of allKeys) {
-              if (faceIdMappingStorage.getNumber(key) === bestMatch.id) {
-                const userInfoJson = userInfoCacheStorage.getString(key);
-                if (userInfoJson) {
-                  foundPerson = JSON.parse(userInfoJson);
-                  break;
-                }
-              }
-            }
-            runOnJS(setRecognizedPerson)(foundPerson);
-          } else {
-            runOnJS(setRecognizedPerson)(null); // 未识别到人
-          }
-        }
-      } else {
-        runOnJS(setRecognizedPerson)(null); // 没有检测到人脸
-      }
-
-      imageStream.dispose(); // 释放图像流资源
-    } catch (e) {
-      console.error('Frame processor error:', e);
-    }
-  }, [faceScore]); // 依赖 faceScore，当其改变时重新创建 worklet
-
-  // 根据权限状态和设备可用性渲染
   if (cameraPermissionStatus === 'not-determined') {
     return <Text style={{ margin: 20, textAlign: 'center' }}>正在请求相机权限...</Text>;
   }
 
-  if (cameraPermissionStatus !== 'granted') { // 检查是否为 'granted'
+  if (cameraPermissionStatus !== 'granted') {
     return <Text style={{ margin: 20, textAlign: 'center' }}>相机权限已被拒绝，无法使用人脸识别功能。</Text>;
   }
 
   if (cameraDevice == null) {
+    console.log('Camera device is null, not rendering Camera component.');
     return <Text style={{ margin: 20, textAlign: 'center' }}>相机设备不可用</Text>;
   }
+
+  console.log('渲染相机组件');
 
   return (
     <SafeAreaView style={styles.container}>
@@ -192,7 +165,7 @@ const FaceRecognitionScreen: React.FC<FaceRecognitionScreenProps> = ({ route }) 
           device={cameraDevice}
           isActive={isFocused && cameraInitialized}
           frameProcessor={frameProcessor}
-          frameProcessorFps={5} // 每秒处理5帧
+          frameProcessorFps={5}
           onInitialized={() => setCameraInitialized(true)}
         />
         {detectedFaces.map((face, index) => (
@@ -221,7 +194,6 @@ const FaceRecognitionScreen: React.FC<FaceRecognitionScreenProps> = ({ route }) 
           <View>
             <Text style={styles.infoText}>姓名: {recognizedPerson.name}</Text>
             <Text style={styles.infoText}>图片URL: {recognizedPerson.imageUrl}</Text>
-            {/* 可以根据需要显示更多信息 */}
           </View>
         ) : (
           <Text style={styles.infoText}>等待识别...</Text>
@@ -237,7 +209,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0f0f0',
   },
   cameraContainer: {
-    flex: 2, // 上半部分相机视图
+    flex: 2,
     backgroundColor: 'black',
     justifyContent: 'center',
     alignItems: 'center',
@@ -258,12 +230,12 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   infoContainer: {
-    flex: 1, // 下半部分信息显示
+    flex: 1,
     padding: 20,
     backgroundColor: 'white',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    marginTop: -20, // 稍微覆盖相机底部，形成视觉连接
+    marginTop: -20,
     elevation: 5,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -2 },
