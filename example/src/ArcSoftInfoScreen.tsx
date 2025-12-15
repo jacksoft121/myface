@@ -27,9 +27,7 @@ import {
   type InspireFaceSession,
   CameraRotation,
   ImageFormat,
-  SearchMode,
-  PrimaryKeyMode,
-} from 'react-native-nitro-inspire-face';
+} from 'react-native-nitro-inspire-face'; // 移除 SearchMode, PrimaryKeyMode
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { getCurrentUser } from './User';
@@ -39,8 +37,8 @@ type RootStackParamList = {
   Login: undefined;
   ArcSoftInfo: undefined;
   RegisteredFaces: undefined;
-  // 添加新的 FaceRecognition 路由及其参数
-  FaceRecognition: {
+  // 将 FaceRecognition 替换为 FaceShow
+  FaceShow: {
     isFront: boolean;
     isLiveness: boolean;
     faceScore: number;
@@ -88,18 +86,19 @@ const userInfoCacheStorage = new MMKV({
   id: 'user-info-cache-storage',
 });
 
-try {
-  InspireFace.launch('Pikachu');
-  InspireFace.featureHubDataEnable({
-    enablePersistence: true,
-    persistenceDbPath: 'inspireface.db',
-    searchThreshold: 0.42, // 默认搜索阈值
-    searchMode: SearchMode.EXHAUSTIVE,
-    primaryKeyMode: PrimaryKeyMode.AUTO_INCREMENT,
-  });
-} catch (e) {
-  Alert.alert('引擎启动失败', (e as Error).message);
-}
+// 移除 InspireFace 的全局初始化代码
+// try {
+//   InspireFace.launch('Pikachu');
+//   InspireFace.featureHubDataEnable({
+//     enablePersistence: true,
+//     persistenceDbPath: 'inspireface.db',
+//     searchThreshold: 0.42, // 默认搜索阈值
+//     searchMode: SearchMode.EXHAUSTIVE,
+//     primaryKeyMode: PrimaryKeyMode.AUTO_INCREMENT,
+//   });
+// } catch (e) {
+//   Alert.alert('引擎启动失败', (e as Error).message);
+// }
 // #endregion
 
 const RECOGNITION_PARAMS_KEY = 'recognition_params';
@@ -504,7 +503,7 @@ const ArcSoftInfoScreen = () => {
   // 处理“开始刷脸”按钮点击事件
   const handleStartFaceRecognition = () => {
     // 导航时传递当前状态中的参数
-    navigation.navigate('FaceRecognition', {
+    navigation.navigate('FaceShow', { // 修改为 FaceShow
       isFront,
       isLiveness,
       faceScore,

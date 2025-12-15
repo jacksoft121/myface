@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,12 +9,7 @@ import {
   Platform,
   ToastAndroid,
 } from 'react-native';
-import {
-  useCameraDevices,
-  Camera,
-  CameraPermissionStatus,
-  useFrameProcessor,
-} from 'react-native-vision-camera';
+import { useCameraDevices, Camera, CameraPermissionStatus, useFrameProcessor } from 'react-native-vision-camera';
 import {
   InspireFace,
   DetectMode,
@@ -140,11 +135,80 @@ const FaceRecognitionScreen: React.FC<FaceRecognitionScreenProps> = ({ route }) 
     };
   }, []);
 
-  // Frame Processor (移除 useCallback 用于排查问题)
+  // Frame Processor
   const frameProcessor = useFrameProcessor((frame) => {
     'worklet';
-    // ⚠️ 这里先什么都不做
-  }, []);
+    if (!sessionRef.current) {
+      return;
+    }
+
+    try {
+      const imageStream = InspireFace.createImageStreamFromCameraFrame(
+        frame,
+        CameraRotation.ROTATION_0
+      );
+
+      if (!imageStream) {
+        return;
+      }
+
+      imageStream.setFormat(ImageFormat.NV21);
+
+      const faces = sessionRef.current.executeFaceTrack(imageStream);
+
+      if (!faces || !Array.isArray(faces)) {
+        imageStream.dispose();
+        return;
+      }
+
+      runOnJS(setDetectedFaces)(faces);
+
+      if (faces.length > 0 && faces[0]) {
+        const faceFeature = sessionRef.current.extractFaceFeature(imageStream, faces[0].token);
+
+        if (!faceFeature) {
+          runOnJS(setRecognizedPerson)(null);
+          imageStream.dispose();
+          return;
+        }
+
+        const searchResult = sessionRef.current.featureHubFaceSearch(faceFeature);
+
+        if (!searchResult || !Array.isArray(searchResult)) {
+          runOnJS(setRecognizedPerson)(null);
+          imageStream.dispose();
+          return;
+        }
+
+        if (searchResult.length > 0 && searchResult[0].score >= faceScore / 100) {
+          const bestMatch = searchResult[0];
+          // MMKV 操作和 setRecognizedPerson 必须在 JS 线程执行
+          runOnJS(() => {
+            const allKeys = faceIdMappingStorage.getAllKeys();
+            let foundPerson = null;
+            for (const key of allKeys) {
+              if (faceIdMappingStorage.getNumber(key) === bestMatch.id) {
+                const userInfoJson = userInfoCacheStorage.getString(key);
+                if (userInfoJson) {
+                  foundPerson = JSON.parse(userInfoJson);
+                  break;
+                }
+              }
+            }
+            setRecognizedPerson(foundPerson);
+          })();
+        } else {
+          runOnJS(setRecognizedPerson)(null);
+        }
+      } else {
+        runOnJS(setRecognizedPerson)(null);
+      }
+
+      imageStream.dispose();
+    } catch (e) {
+      console.error('Frame processor error:', e);
+    }
+  }, [sessionRef, faceScore, setDetectedFaces, setRecognizedPerson]); // 依赖项
 
   if (cameraPermissionStatus === 'not-determined') {
     return <Text style={{ margin: 20, textAlign: 'center' }}>正在请求相机权限...</Text>;
@@ -155,11 +219,8 @@ const FaceRecognitionScreen: React.FC<FaceRecognitionScreenProps> = ({ route }) 
   }
 
   if (cameraDevice == null) {
-    console.log('Camera device is null, not rendering Camera component.');
     return <Text style={{ margin: 20, textAlign: 'center' }}>相机设备不可用</Text>;
   }
-
-  console.log('渲染相机组件');
 
   return (
     <SafeAreaView style={styles.container}>
@@ -168,8 +229,9 @@ const FaceRecognitionScreen: React.FC<FaceRecognitionScreenProps> = ({ route }) 
           ref={cameraRef}
           style={StyleSheet.absoluteFill}
           device={cameraDevice}
-          isActive={isFocused}
+          isActive={isFocused && cameraInitialized}
           frameProcessor={frameProcessor}
+          frameProcessorFps={5}
           onInitialized={() => setCameraInitialized(true)}
         />
         {detectedFaces.map((face, index) => (
