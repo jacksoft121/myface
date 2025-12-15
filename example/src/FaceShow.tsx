@@ -1,39 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Dimensions, Platform } from 'react-native';
+import { View, Text, StyleSheet, Dimensions } from 'react-native';
 import {
   Camera,
   useCameraDevice,
   useFrameProcessor,
 } from 'react-native-vision-camera';
 import { runOnJS } from 'react-native-reanimated';
-import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import {
   InspireFace,
   DetectMode,
-  ImageFormat,
   CameraRotation,
   type Face,
 } from 'react-native-nitro-inspire-face';
 
 /* =======================
- * 类型定义
+ * 类型
  * ======================= */
-
-type RootStackParamList = {
-  FaceShow: {
-    isFront: boolean;
-    isLiveness: boolean;
-    faceScore: number;
-    faceQuality: number;
-    facePreviewSize: string;
-  };
-};
-
-type FaceShowScreenProps = NativeStackScreenProps<
-  RootStackParamList,
-  'FaceShow'
->;
 
 type TrackedFace = {
   trackId: number;
@@ -42,7 +25,7 @@ type TrackedFace = {
 };
 
 /* =======================
- * 常量
+ * 预览尺寸
  * ======================= */
 
 const { width } = Dimensions.get('window');
@@ -50,12 +33,12 @@ const PREVIEW_W = width;
 const PREVIEW_H = width * 1.33;
 
 /* =======================
- * 全局 Session（只创建一次）
+ * 全局 Session（JS 主线程）
  * ======================= */
 
 let faceSession: any = null;
 
-function ensureSession() {
+function getSession() {
   if (faceSession) return faceSession;
 
   faceSession = InspireFace.createSession(
@@ -80,17 +63,18 @@ function ensureSession() {
 }
 
 /* =======================
- * 主组件
+ * 组件
  * ======================= */
 
-export default function FaceShowScreen({ route }: FaceShowScreenProps) {
+export default function FaceShowScreen() {
   const device = useCameraDevice('front');
   const [hasPermission, setHasPermission] = useState(false);
   const [faces, setFaces] = useState<TrackedFace[]>([]);
 
   /* =======================
-   * 请求相机权限
+   * 权限
    * ======================= */
+
   useEffect(() => {
     (async () => {
       const status = await Camera.requestCameraPermission();
@@ -106,28 +90,34 @@ export default function FaceShowScreen({ route }: FaceShowScreenProps) {
   }, []);
 
   /* =======================
-   * JS 回调
+   * JS 识别逻辑（核心）
    * ======================= */
-  const onFacesDetected = (list: TrackedFace[]) => {
-    setFaces(list);
-  };
 
-  /* =======================
-   * FrameProcessor
-   * ======================= */
-  const frameProcessor = useFrameProcessor((frame) => {
-    'worklet';
+  const onFrameJS = (
+    buffer: ArrayBuffer,
+    width: number,
+    height: number
+  ) => {
+    const session = getSession();
 
-    const session = ensureSession();
+    // RGBA → ImageBitmap
+    const bitmap = InspireFace.createImageBitmapFromBuffer(
+      buffer,
+      width,
+      height,
+      4
+    );
 
-    const stream = InspireFace.createImageStreamFromFrame(frame);
-    stream.setFormat(ImageFormat.BGR);
-    stream.setRotation(CameraRotation.ROTATION_0);
+    // Bitmap → ImageStream
+    const stream = InspireFace.createImageStreamFromBitmap(
+      bitmap,
+      CameraRotation.ROTATION_0
+    );
 
     const detected = session.executeFaceTrack(stream);
 
     if (!detected || detected.length === 0) {
-      runOnJS(onFacesDetected)([]);
+      setFaces([]);
       return;
     }
 
@@ -137,17 +127,33 @@ export default function FaceShowScreen({ route }: FaceShowScreenProps) {
       confidence: f.confidence ?? 0,
     }));
 
-    runOnJS(onFacesDetected)(result);
+    setFaces(result);
+  };
+
+  /* =======================
+   * FrameProcessor（只取 buffer）
+   * ======================= */
+
+  const frameProcessor = useFrameProcessor((frame) => {
+    'worklet';
+
+    const buffer = frame.toArrayBuffer();
+
+    runOnJS(onFrameJS)(
+      buffer,
+      frame.width,
+      frame.height
+    );
   }, []);
 
   /* =======================
-   * UI 状态判断
+   * UI 状态
    * ======================= */
 
   if (!hasPermission) {
     return (
       <View style={styles.root}>
-        <Text style={styles.errorText}>正在请求相机权限…</Text>
+        <Text style={styles.errorText}>请求相机权限中…</Text>
       </View>
     );
   }
@@ -161,7 +167,7 @@ export default function FaceShowScreen({ route }: FaceShowScreenProps) {
   }
 
   /* =======================
-   * 正常渲染
+   * 渲染
    * ======================= */
 
   return (
@@ -226,6 +232,5 @@ const styles = StyleSheet.create({
   errorText: {
     color: 'white',
     fontSize: 18,
-    textAlign: 'center',
   },
 });
