@@ -9,7 +9,12 @@ import {
   Platform,
   ToastAndroid,
 } from 'react-native';
-import { useCameraDevices, Camera, CameraPermissionStatus } from 'react-native-vision-camera';
+import {
+  useCameraDevices,
+  Camera,
+  CameraPermissionStatus,
+  useFrameProcessor,
+} from 'react-native-vision-camera';
 import {
   InspireFace,
   DetectMode,
@@ -136,10 +141,10 @@ const FaceRecognitionScreen: React.FC<FaceRecognitionScreenProps> = ({ route }) 
   }, []);
 
   // Frame Processor (移除 useCallback 用于排查问题)
-  const frameProcessor = (frame: any) => {
+  const frameProcessor = useFrameProcessor((frame) => {
     'worklet';
-    console.log('Worklet frameProcessor called.');
-  };
+    // ⚠️ 这里先什么都不做
+  }, []);
 
   if (cameraPermissionStatus === 'not-determined') {
     return <Text style={{ margin: 20, textAlign: 'center' }}>正在请求相机权限...</Text>;
@@ -163,9 +168,8 @@ const FaceRecognitionScreen: React.FC<FaceRecognitionScreenProps> = ({ route }) 
           ref={cameraRef}
           style={StyleSheet.absoluteFill}
           device={cameraDevice}
-          isActive={isFocused && cameraInitialized}
+          isActive={isFocused}
           frameProcessor={frameProcessor}
-          frameProcessorFps={5}
           onInitialized={() => setCameraInitialized(true)}
         />
         {detectedFaces.map((face, index) => (
