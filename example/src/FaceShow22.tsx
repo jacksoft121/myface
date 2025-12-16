@@ -9,20 +9,20 @@ import {
   useCameraFormat,
   useSkiaFrameProcessor,
 } from 'react-native-vision-camera';
+import {runOnJS} from 'react-native-reanimated';
 
 import {
   InspireFace,
   BoxedInspireFace,
   DetectMode,
   CameraRotation,
-  type Face, type Session,
+  type Face,
 } from 'react-native-nitro-inspire-face';
 import {Worklets} from 'react-native-worklets-core';
 import {NitroModules} from "react-native-nitro-modules";
 
 import {useResizePlugin} from "vision-camera-resize-plugin";
-import {Skia, Canvas, useCanvasSize, Rect, size} from "@shopify/react-native-skia";
-import {useSharedValue, useDerivedValue,runOnJS} from "react-native-reanimated";
+import {Skia} from "@shopify/react-native-skia";
 
 /* =======================
  * 类型
@@ -34,11 +34,13 @@ type TrackedFace = {
   confidence: number;
 };
 
+/* =======================
+ * 预览尺寸
+ * ======================= */
 
-const {width, height} = Dimensions.get('window');
+const {width} = Dimensions.get('window');
 const PREVIEW_W = width;
 const PREVIEW_H = width * 1.33;
-
 
 /* =======================
  * 全局 Session（JS 主线程）
@@ -49,8 +51,7 @@ let faceSession: any = null;
 /* =======================
  * 组件
  * ======================= */
-//Launch the model package
-InspireFace.launch("Pikachu");
+
 export default function FaceShowScreen() {
   const [hasPermission, setHasPermission] = useState(false);
   const [faces, setFaces] = useState<TrackedFace[]>([]);
@@ -76,7 +77,7 @@ export default function FaceShowScreen() {
   /* =======================
    * JS 识别逻辑（核心）
    * ======================= */
-  let device = useCameraDevice("front");
+  let device = useCameraDevice("back");
   const camera = useRef<Camera>(null);
   const {resize} = useResizePlugin();
 
@@ -101,66 +102,6 @@ export default function FaceShowScreen() {
   );
   session.setTrackPreviewSize(320);
   session.setFaceDetectThreshold(0.5);
-  const BoxedInspireFaceSession = NitroModules.box(session);
-
-  const facesSharedValue = useSharedValue([]);
-  const cameraProcessor = useFrameProcessor(
-    (frame) => {
-      'worklet';
-
-      console.log(
-        `Frame打印: ${frame.width}x${frame.height} (${frame.pixelFormat})`
-      );
-      const buffer = frame.toArrayBuffer();
-      console.log(
-        `Frame打印2: ${frame.width}x${frame.height} (${frame.pixelFormat})`
-      );
-
-      // 性能优化：限制每秒处理多少帧 (例如 15fps)，防止手机发烫
-      runAtTargetFps(15, () => {
-        console.log(`runAtTargetFps 15fps`);
-        // RGBA → ImageBitmap
-        console.log(`runAtTargetFps buffer= ${buffer.byteLength}`);
-        try {
-
-          // Unbox InspireFace instance for frame processor
-          const unboxedInspireFace = BoxedInspireFace.unbox();
-
-          // Create image bitmap from frame buffer
-          const bitmap = unboxedInspireFace.createImageBitmapFromBuffer(
-            buffer as ArrayBuffer,
-            frame.width,
-            frame.height,
-            3
-          );
-
-          // Create image stream for face detection
-          const imageStream = unboxedInspireFace.createImageStreamFromBitmap(
-            bitmap,
-            CameraRotation.ROTATION_0
-          );
-
-          // Unbox session and execute face detection
-          const unboxedSession = BoxedInspireFaceSession.unbox();
-          const facesTrack = unboxedSession.executeFaceTrack(imageStream);
-          console.log("frameProcessor facesTrack", facesTrack);
-          facesSharedValue.value = facesTrack;
-          bitmap.dispose();
-          imageStream.dispose();
-
-        } catch (e) {
-          console.error('Tracking Error:', e);
-        } finally {
-
-        }
-
-
-
-      });
-    },
-    []
-  );
-
 
   const frameProcessor = useSkiaFrameProcessor((frame) => {
     "worklet";
@@ -169,9 +110,71 @@ export default function FaceShowScreen() {
     // Draw the frame to the canvas
     frame.render();
     console.log("frameProcessor render");
+    const size = 320;
+    const frameWidth = frame.height; // 720
+    const scaleX = frameWidth / size; // Scale based on processed width
+    const cropOffset = (frame.width - frame.height) / 2; // Adjust for cropping
 
+    // Resize frame for processing
+    const resized = resize(frame, {
+      scale: {
+        width: size,
+        height: size,
+      },
+      rotation: "90deg",
+      pixelFormat: "bgr",
+      dataType: "uint8",
+      mirror: true,
+    });
+    console.log("frameProcessor resized", resized);
+    /*
+    // Unbox InspireFace instance for frame processor
+    const unboxedInspireFace = BoxedInspireFace.unbox();
+    console.log("frameProcessor unboxedInspireFace", unboxedInspireFace.toString());
+    // Create image bitmap from frame buffer
+    const bitmap = unboxedInspireFace.createImageBitmapFromBuffer(
+      resized.buffer as ArrayBuffer,
+      size,
+      size,
+      3
+    );
+    console.log("frameProcessor bitmap");
+    // Create image stream for face detection
+    const imageStream = unboxedInspireFace.createImageStreamFromBitmap(
+      bitmap,
+      CameraRotation.ROTATION_0
+    );
+    console.log("frameProcessor imageStream");
+    // Unbox session and execute face detection
+    const unboxedSession = session.unbox();
+    const faces = unboxedSession.executeFaceTrack(imageStream);
+    console.log("frameProcessor faces", faces);
 
+    // Draw facial landmarks for each detected face
+    for (let i = 0; i < faces.length; i++) {
+      const lmk = unboxedInspireFace.getFaceDenseLandmarkFromFaceToken(
+        faces[i].token
+      );
+      const path = Skia.Path.Make();
+
+      // Draw landmark points
+      lmk.forEach((point) => {
+        path.addCircle(point.y * scaleX + cropOffset, point.x * scaleX, 3);
+      });
+
+      // Draw landmarks to canvas
+      frame.drawPath(path, paint);
+    }
+
+    // Clean up resources
+    imageStream.dispose();
+    bitmap.dispose();
+
+    */
   }, []);
+  /* =======================
+   * FrameProcessor（只取 buffer）
+   * ======================= */
 
 
   /* =======================
@@ -201,17 +204,14 @@ export default function FaceShowScreen() {
   return (
     <View style={styles.root}>
       <Camera
-        style={{ width: PREVIEW_W, height: PREVIEW_H }}
+        style={styles.camera}
         device={device}
         isActive={true}
-        frameProcessor={cameraProcessor}
+        frameProcessor={frameProcessor}
         frameProcessorFps={5}
       />
-      <Canvas
-        style={{ width: PREVIEW_W, height: PREVIEW_H }}
-      />
 
-      {facesSharedValue.value.map((f) => (
+      {faces.map((f) => (
         <View
           key={f.trackId}
           style={[
