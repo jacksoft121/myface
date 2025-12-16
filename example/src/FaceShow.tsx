@@ -101,7 +101,7 @@ export default function FaceShowScreen() {
   );
   session.setTrackPreviewSize(320);
   session.setFaceDetectThreshold(0.5);
-  const BoxedInspireFaceSession = NitroModules.box(session);
+  const boxedInspireFaceSession = NitroModules.box(session);
 
   const facesSharedValue = useSharedValue([]);
   const cameraProcessor = useFrameProcessor(
@@ -111,26 +111,36 @@ export default function FaceShowScreen() {
       console.log(
         `Frame打印: ${frame.width}x${frame.height} (${frame.pixelFormat})`
       );
-      const buffer = frame.toArrayBuffer();
-      console.log(
-        `Frame打印2: ${frame.width}x${frame.height} (${frame.pixelFormat})`
-      );
+
 
       // 性能优化：限制每秒处理多少帧 (例如 15fps)，防止手机发烫
       runAtTargetFps(15, () => {
         console.log(`runAtTargetFps 15fps`);
         // RGBA → ImageBitmap
+        const buffer = frame.toArrayBuffer();
+        console.log(
+          `Frame打印2: ${frame.width}x${frame.height} (${frame.pixelFormat})`
+        );
         console.log(`runAtTargetFps buffer= ${buffer.byteLength}`);
         try {
-
+          const resized = resize(frame, {
+            scale: {
+              width: frame.width/2,
+              height: frame.height/2,
+            },
+            rotation: "90deg",
+            pixelFormat: "bgr",
+            dataType: "uint8",
+            mirror: true,
+          });
           // Unbox InspireFace instance for frame processor
           const unboxedInspireFace = BoxedInspireFace.unbox();
 
           // Create image bitmap from frame buffer
           const bitmap = unboxedInspireFace.createImageBitmapFromBuffer(
             buffer as ArrayBuffer,
-            frame.width,
-            frame.height,
+            frame.width/2,
+            frame.height/2,
             3
           );
 
@@ -141,10 +151,15 @@ export default function FaceShowScreen() {
           );
 
           // Unbox session and execute face detection
-          const unboxedSession = BoxedInspireFaceSession.unbox();
-          const facesTrack = unboxedSession.executeFaceTrack(imageStream);
-          console.log("frameProcessor facesTrack", facesTrack);
-          facesSharedValue.value = facesTrack;
+          const unboxedSession = boxedInspireFaceSession.unbox();
+          const multipleFaceData = unboxedSession.executeFaceTrack(imageStream);
+          if (multipleFaceData.length === 0) {
+            console.log('未检测到人脸');
+            return;
+          }
+          console.log('检测到人脸'+multipleFaceData.length+'张');
+          console.log("frameProcessor facesTrack", multipleFaceData);
+          facesSharedValue.value = multipleFaceData;
           bitmap.dispose();
           imageStream.dispose();
 
@@ -162,13 +177,13 @@ export default function FaceShowScreen() {
   );
 
 
-  const frameProcessor = useSkiaFrameProcessor((frame) => {
+  const frameSkiaProcessor = useSkiaFrameProcessor((frame) => {
     "worklet";
 
-    console.log("frameProcessor frame.width", frame.width);
+    console.log("frameSkiaProcessor frame.width", frame.width);
     // Draw the frame to the canvas
     frame.render();
-    console.log("frameProcessor render");
+    console.log("frameSkiaProcessor render");
 
 
   }, []);
