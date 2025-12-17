@@ -178,7 +178,7 @@ export default function FaceShowScreen() {
     return (
       <View style={styles.root}>
         <Text style={styles.errorText}>
-          {!hasPermission ? '正在请求相机权限...' : '未找到前置摄像头'}
+          {!hasPermission ? 'Requesting camera permission...' : 'Front camera not found'}
         </Text>
       </View>
     );
@@ -191,10 +191,8 @@ export default function FaceShowScreen() {
         device={device}
         isActive={true}
         frameProcessor={frameProcessor}
-        pixelFormat="yuv" // 使用 yuv 格式，更稳定
+        pixelFormat="yuv"
       />
-
-      {/* 使用绝对定位的 View 在预览之上叠加人脸框 */}
       {faces.map((f) => (
         <View
           key={f.trackId}
