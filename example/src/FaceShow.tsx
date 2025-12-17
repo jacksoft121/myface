@@ -1,232 +1,124 @@
-import React, {useEffect, useRef, useState} from 'react';
-import {View, Text, StyleSheet, Dimensions} from 'react-native';
+import React, { useEffect, useState, useRef } from 'react';
+import { View, Text, StyleSheet, Dimensions } from 'react-native';
 import {
   Camera,
   runAtTargetFps,
   useCameraDevice,
   useFrameProcessor,
-  Templates,
-  useCameraFormat,
-  useSkiaFrameProcessor,
 } from 'react-native-vision-camera';
-
 import {
   InspireFace,
   BoxedInspireFace,
   DetectMode,
   CameraRotation,
-  type Face, type Session,
+  type Face,
 } from 'react-native-nitro-inspire-face';
-import {Worklets} from 'react-native-worklets-core';
-import {NitroModules} from "react-native-nitro-modules";
+import { NitroModules } from 'react-native-nitro-modules';
+import { useResizePlugin } from 'vision-camera-resize-plugin';
+import { runOnJS } from 'react-native-reanimated';
+import { Skia } from "@shopify/react-native-skia";
 
-import {useResizePlugin} from "vision-camera-resize-plugin";
-import {Skia, Canvas, useCanvasSize, Rect, size} from "@shopify/react-native-skia";
-import {useSharedValue, useDerivedValue,runOnJS} from "react-native-reanimated";
-
-/* =======================
- * 类型
- * ======================= */
-
-type TrackedFace = {
-  trackId: number;
-  rect: Face['rect'];
-  confidence: number;
-};
-
-
-const {width, height} = Dimensions.get('window');
+// 常量
+const { width } = Dimensions.get('window');
 const PREVIEW_W = width;
-const PREVIEW_H = width * 1.33;
+const PREVIEW_H = width * (16 / 9); // 使用常见的 16:9 宽高比
 
-
-/* =======================
- * 全局 Session（JS 主线程）
- * ======================= */
-
-let faceSession: any = null;
-
-/* =======================
- * 组件
- * ======================= */
-//Launch the model package
-InspireFace.launch("Pikachu");
 export default function FaceShowScreen() {
   const [hasPermission, setHasPermission] = useState(false);
-  const [faces, setFaces] = useState<TrackedFace[]>([]);
+  const [faces, setFaces] = useState<Face[]>([]); // 使用 React state 来更新 UI
+  const device = useCameraDevice('front');
+  const { resize } = useResizePlugin();
 
-  /* =======================
-   * 权限
-   * ======================= */
+  // 一次性初始化 InspireFace Session
+  const boxedInspireFaceSession = useRef(
+    (() => {
+      InspireFace.launch('Pikachu');
+      const session = InspireFace.createSession(
+        { enableLiveness: true },
+        DetectMode.ALWAYS_DETECT,
+        10,
+        -1, // Detection resolution level (multiple of 160, default -1 means 320)
+        -1  // Frame rate for tracking mode (default -1 means 30fps)
+      );
+      session.setTrackPreviewSize(320);
+      session.setFaceDetectThreshold(0.5);
+      return NitroModules.box(session);
+    })()
+  ).current;
 
   useEffect(() => {
     (async () => {
       const status = await Camera.requestCameraPermission();
       setHasPermission(status === 'granted');
     })();
+    // 组件卸载时清理 Session
+    return () => { boxedInspireFaceSession.unbox()?.dispose(); };
+  }, [boxedInspireFaceSession]);
 
-    return () => {
-      if (faceSession) {
-        faceSession.dispose();
-        faceSession = null;
-      }
-    };
-  }, []);
-
-  /* =======================
-   * JS 识别逻辑（核心）
-   * ======================= */
-  let device = useCameraDevice("front");
-  const camera = useRef<Camera>(null);
-  const {resize} = useResizePlugin();
-
-  const format = useCameraFormat(device, Templates.FrameProcessing);
-
-  const paint = Skia.Paint();
-  paint.setColor(Skia.Color("blue"));
-
-  const session = InspireFace.createSession(
-    {
-      enableRecognition: true,
-      enableFaceQuality: true,
-      enableFaceAttribute: true,
-      enableInteractionLiveness: true,
-      enableLiveness: true,
-      enableMaskDetect: true,
-    },
-    DetectMode.ALWAYS_DETECT,
-    10,
-    -1,
-    -1
-  );
-  session.setTrackPreviewSize(320);
-  session.setFaceDetectThreshold(0.5);
-  const boxedInspireFaceSession = NitroModules.box(session);
-
-  const facesSharedValue = useSharedValue([]);
-  const cameraProcessor = useFrameProcessor(
+  const frameProcessor = useFrameProcessor(
     (frame) => {
       'worklet';
 
-      console.log(
-        `Frame打印: ${frame.width}x${frame.height} (${frame.pixelFormat})`
-      );
+      // 使用 runOnJS 包装 React state 更新函数
+      const setFacesJS = runOnJS(setFaces);
 
-
-      // 性能优化：限制每秒处理多少帧 (例如 15fps)，防止手机发烫
+      // 以较低的帧率运行消耗资源的人脸检测
       runAtTargetFps(15, () => {
-        console.log(`runAtTargetFps 15fps`);
-        // RGBA → ImageBitmap
-        const buffer = frame.toArrayBuffer();
-        console.log(
-          `Frame打印2: ${frame.width}x${frame.height} (${frame.pixelFormat})`
-        );
-        console.log(`runAtTargetFps buffer= ${buffer.byteLength}`);
         try {
+
+          // 使用 resize 插件转换帧的尺寸和像素格式
           const resized = resize(frame, {
-            scale: {
-              width: frame.width/2,
-              height: frame.height/2,
-            },
-            rotation: "90deg",
-            pixelFormat: "bgr",
-            dataType: "uint8",
-            mirror: true,
+            scale: { width: 320, height: (320 * frame.height) / frame.width },
+            pixelFormat: 'bgr', // InspireFace SDK 可能需要 BGR 格式
+            dataType: 'uint8',
           });
-          // Unbox InspireFace instance for frame processor
+
+          // 从转换后的帧中获取 ArrayBuffer
+          const buffer = resized.buffer as ArrayBuffer;
           const unboxedInspireFace = BoxedInspireFace.unbox();
 
-          // Create image bitmap from frame buffer
-          const bitmap = unboxedInspireFace.createImageBitmapFromBuffer(
-            buffer as ArrayBuffer,
-            frame.width/2,
-            frame.height/2,
-            3
-          );
+          // 使用转换后的 buffer 和尺寸创建 bitmap
+          const bitmap = unboxedInspireFace.createImageBitmapFromBuffer(buffer, 320, 320, 3);
+          const imageStream = unboxedInspireFace.createImageStreamFromBitmap(bitmap, CameraRotation.ROTATION_0);
 
-          // Create image stream for face detection
-          const imageStream = unboxedInspireFace.createImageStreamFromBitmap(
-            bitmap,
-            CameraRotation.ROTATION_0
-          );
-
-          // Unbox session and execute face detection
           const unboxedSession = boxedInspireFaceSession.unbox();
           const multipleFaceData = unboxedSession.executeFaceTrack(imageStream);
-          if (multipleFaceData.length === 0) {
-            console.log('未检测到人脸');
-            return;
-          }
-          console.log('检测到人脸'+multipleFaceData.length+'张');
-          console.log("frameProcessor facesTrack", multipleFaceData);
-          facesSharedValue.value = multipleFaceData;
+          console.log('multipleFaceData:', multipleFaceData.length);
+          // 安全地更新 UI state 来绘制人脸框
+          // setFacesJS(multipleFaceData);
+
           bitmap.dispose();
           imageStream.dispose();
-
-        } catch (e) {
-          console.error('Tracking Error:', e);
-        } finally {
-
+        } catch (e:Error) {
+          console.error('人脸追踪出错:'+e.name+' message:'+e.message+' stack:'+e.stack);
         }
-
-
-
       });
     },
-    []
+    [resize, boxedInspireFaceSession]
   );
 
-
-  const frameSkiaProcessor = useSkiaFrameProcessor((frame) => {
-    "worklet";
-
-    console.log("frameSkiaProcessor frame.width", frame.width);
-    // Draw the frame to the canvas
-    frame.render();
-    console.log("frameSkiaProcessor render");
-
-
-  }, []);
-
-
-  /* =======================
-   * UI 状态
-   * ======================= */
-
-  if (!hasPermission) {
+  if (!hasPermission || !device) {
     return (
       <View style={styles.root}>
-        <Text style={styles.errorText}>请求相机权限中…</Text>
+        <Text style={styles.errorText}>
+          {!hasPermission ? '正在请求相机权限...' : '未找到前置摄像头'}
+        </Text>
       </View>
     );
   }
-
-  if (!device) {
-    return (
-      <View style={styles.root}>
-        <Text style={styles.errorText}>未检测到前置摄像头</Text>
-      </View>
-    );
-  }
-
-  /* =======================
-   * 渲染
-   * ======================= */
 
   return (
     <View style={styles.root}>
       <Camera
-        style={{ width: PREVIEW_W, height: PREVIEW_H }}
+        style={[StyleSheet.absoluteFill, { width: PREVIEW_W, height: PREVIEW_H }]}
         device={device}
         isActive={true}
-        frameProcessor={cameraProcessor}
-        frameProcessorFps={5}
-      />
-      <Canvas
-        style={{ width: PREVIEW_W, height: PREVIEW_H }}
+        frameProcessor={frameProcessor}
+        pixelFormat="yuv" // 使用 yuv 格式，更稳定
       />
 
-      {facesSharedValue.value.map((f) => (
+      {/* 使用绝对定位的 View 在预览之上叠加人脸框 */}
+      {faces.map((f) => (
         <View
           key={f.trackId}
           style={[
@@ -246,20 +138,12 @@ export default function FaceShowScreen() {
   );
 }
 
-/* =======================
- * 样式
- * ======================= */
-
 const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: '#000',
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  camera: {
-    width: PREVIEW_W,
-    height: PREVIEW_H,
   },
   box: {
     position: 'absolute',
