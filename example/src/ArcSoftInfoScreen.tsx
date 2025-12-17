@@ -45,6 +45,7 @@ type RootStackParamList = {
     faceQuality: number;
     facePreviewSize: string;
   };
+  SkiaDemo: undefined;
 };
 
 type ArcSoftInfoScreenNavigationProp = NativeStackNavigationProp<
@@ -425,7 +426,6 @@ const ArcSoftInfoScreen = () => {
       const dataKey = '#result-set-1';
       if (res && res.data && res.data[dataKey]) {
         const campuses: Campus[] = res.data[dataKey];
-        setCampusList(campuses);
         const defaultCampus =
           campuses.find((c) => c.ID === currentUser.ID) || campuses[0];
         if (defaultCampus) {
@@ -622,7 +622,10 @@ const ArcSoftInfoScreen = () => {
       </ScrollView>
       <View style={styles.bottomBar}>
         {idtype !== 3 && (
-          <TouchableOpacity style={styles.bottomButton}>
+          <TouchableOpacity
+            style={styles.bottomButton}
+            onPress={() => navigation.navigate('SkiaDemo')}
+          >
             <Text style={styles.buttonText}>刷脸记录</Text>
           </TouchableOpacity>
         )}

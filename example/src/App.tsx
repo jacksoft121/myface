@@ -7,6 +7,7 @@ import LoginScreen from './LoginScreen';
 import ArcSoftInfoScreen from './ArcSoftInfoScreen';
 import RegisteredFacesScreen from './RegisteredFacesScreen';
 import FaceShowScreen from './FaceShow';
+import { SkiaDemoScreen } from './SkiaDemoScreen';
 
 import {
   InspireFace,
@@ -26,6 +27,7 @@ export type RootStackParamList = {
     faceQuality: number;
     facePreviewSize: string;
   };
+  SkiaDemo: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -70,6 +72,11 @@ export default function App() {
           name="FaceShow"
           component={FaceShowScreen}
           options={{ title: '人脸识别' }}
+        />
+        <Stack.Screen
+          name="SkiaDemo"
+          component={SkiaDemoScreen}
+          options={{ title: 'Skia Demo' }}
         />
       </Stack.Navigator>
     </NavigationContainer>
