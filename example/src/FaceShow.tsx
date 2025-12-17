@@ -86,6 +86,8 @@ type FaceBoxUI = {
   height: number;
   id: number; // 这里用 trackId，当作识别 id（你可替换成 personId）
   name?: string;
+  confidence?: number; // 添加置信度字段
+  isMatched?: boolean; // 添加匹配状态字段
 };
 
 type FaceBoxBuf = {
@@ -248,6 +250,9 @@ export default function Example() {
             ...mapped,
             id,
             name,
+            // 传递置信度和匹配状态到UI层
+            confidence: b.confidence,
+            isMatched: b.isMatched,
           };
         });
 
@@ -317,6 +322,9 @@ export default function Example() {
                 unboxedInspireFace.featureHubFaceSearch(feature);
               let name = 'Unknown';
               let resultText = '';
+              let confidence = 0;
+              let isMatched = false;
+
               if (
                 searched &&
                 searched.confidence &&
@@ -331,6 +339,8 @@ export default function Example() {
                   resultText = `识别到：${name} (${(
                     searched.confidence * 100
                   ).toFixed(1)}%)`;
+                  confidence = searched.confidence;
+                  isMatched = true;
                 }
               }
               // 兼容：rect 可能是 0~1 归一化，也可能是 0~320 像素
@@ -359,6 +369,9 @@ export default function Example() {
                 width: wBuf,
                 height: hBuf,
                 trackId: Number(f.trackId ?? 0),
+                // 添加置信度和匹配状态信息
+                confidence: confidence,
+                isMatched: isMatched,
               });
             }
           }
@@ -443,13 +456,25 @@ export default function Example() {
         onSize={canvasSize}
       >
         {boxes.map((b) => {
-          const label = b.name ? `ID:${b.id}  ${b.name}` : `ID:${b.id}`;
+          // 构造显示标签：如果有人名则显示ID和姓名，否则只显示ID
+          // 如果有置信度信息，则添加到标签中
+          let label = b.name ? `ID:${b.id}  ${b.name}` : `ID:${b.id}`;
+          if (b.confidence !== undefined) {
+            label += ` (${(b.confidence * 100).toFixed(1)}%)`;
+          }
 
+          // 根据匹配状态确定颜色：绿色表示匹配，红色表示未匹配
+          const boxColor = b.isMatched ? "#00FF00" : "#FF0000";
+          const bgColor = b.isMatched ? "rgba(0,255,0,0.85)" : "rgba(255,0,0,0.85)";
+          const textColor = b.isMatched ? "#000000" : "#FFFFFF";
+
+          // 计算标签背景的尺寸
           const padX = 6;
           const padY = 4;
           const textW = font ? font.getTextWidth(label) + padX * 2 : 120;
           const textH = font ? font.getSize() + padY * 2 + 6 : 24;
 
+          // 计算标签背景的位置（在人脸框上方）
           const bgX = b.x;
           const bgY = Math.max(0, b.y - textH - 6);
 
@@ -457,39 +482,59 @@ export default function Example() {
             <React.Fragment
               key={`${b.id}-${Math.round(b.x)}-${Math.round(b.y)}`}
             >
-              {/* 框（stroke） */}
+              {/* 绘制人脸框（根据匹配状态显示不同颜色） */}
               <Rect
                 x={b.x}
                 y={b.y}
                 width={b.width}
                 height={b.height}
-                color="#00FF00"
+                color={boxColor}
                 style="stroke"
                 strokeWidth={3}
               />
 
-              {/* label 背景 */}
+              {/* 绘制标签背景（根据匹配状态显示不同颜色） */}
               <Rect
                 x={bgX}
                 y={bgY}
                 width={textW}
                 height={textH}
-                color="rgba(0,255,0,0.85)"
+                color={bgColor}
               />
 
-              {/* label 文字 */}
+              {/* 绘制标签文字（根据匹配状态显示不同颜色） */}
               {font ? (
                 <SkiaText
                   x={bgX + padX}
                   y={bgY + textH - padY - 4}
                   text={label}
                   font={font}
-                  color="#000000"
+                  color={textColor}
                 />
               ) : null}
             </React.Fragment>
           );
         })}
+
+        {/* 显示已注册人数 */}
+        {font && (
+          <React.Fragment>
+            <Rect
+              x={PREVIEW_W - 160}
+              y={20}
+              width={150}
+              height={30}
+              color="rgba(0,0,0,0.5)"
+            />
+            <SkiaText
+              x={PREVIEW_W - 150}
+              y={45}
+              text={`已注册人数: ${registeredFaces.length}`}
+              font={font}
+              color="#FFFFFF"
+            />
+          </React.Fragment>
+        )}
       </Canvas>
     </View>
   );
