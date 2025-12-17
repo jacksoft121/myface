@@ -1,60 +1,209 @@
 import 'react-native-worklets-core';
-import React, {useEffect, useMemo, useCallback, useState} from 'react';
-import {View, Text, StyleSheet, Dimensions} from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Dimensions,
+  Platform,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+
+import {
+  BoxedInspireFace,
+  CameraRotation,
+  DetectMode,
+  InspireFace,
+  type FaceData,
+} from 'react-native-nitro-inspire-face';
+import { NitroModules } from 'react-native-nitro-modules';
+
 import {
   Camera,
-  runAtTargetFps,
+  Templates,
   useCameraDevice,
+  useCameraFormat,
   useFrameProcessor,
+  runAtTargetFps,
 } from 'react-native-vision-camera';
+import { useResizePlugin } from 'vision-camera-resize-plugin';
+
 import {
-  InspireFace,
-  BoxedInspireFace,
-  DetectMode,
-  CameraRotation,
-  type Face,
-} from 'react-native-nitro-inspire-face';
-import {NitroModules} from 'react-native-nitro-modules';
-import {useResizePlugin} from 'vision-camera-resize-plugin';
-import {Worklets} from 'react-native-worklets-core';
+  check,
+  request,
+  openSettings,
+  PERMISSIONS,
+  RESULTS,
+} from 'react-native-permissions';
 
-// ====== 常量 ======
-const {width} = Dimensions.get('window');
-const PREVIEW_W = width;
-const PREVIEW_H = width * (16 / 9);
+import { Worklets } from 'react-native-worklets-core';
 
-// 是否镜像 X（前摄通常需要镜像才能对齐 UI）
-const MIRROR_X = true;
+// ✅ Skia 2.2.12：用 Canvas + Rect + Text（不要用 PaintStyle/MakeDefault）
+import {
+  Canvas,
+  Rect,
+  Text as SkiaText,
+  useFont,
+} from '@shopify/react-native-skia';
+import { useSharedValue } from 'react-native-reanimated';
+import { MMKV } from 'react-native-mmkv';
 
-// 追踪输入宽度（与你 session.setTrackPreviewSize(320) 一致）
-const TRACK_W = 320;
+// 初始化 MMKV
+const storage = new MMKV({
+  id: 'user-faces-storage',
+});
+// Launch the model package
+InspireFace.launch('Pikachu');
 
-// 日志开关（建议先开着，稳定后关掉）
-const DEBUG_JS = true;
-const DEBUG_WORKLET = false;
+const { width: WIN_W } = Dimensions.get('window');
+const PREVIEW_W = WIN_W;
+const PREVIEW_H = WIN_W * (16 / 9);
 
-// JS 日志
-const logJs = (tag: string, data?: any) => {
-  if (!DEBUG_JS) return;
-  try {
-    if (data === undefined) console.log(`[JS] ${tag}`);
-    else console.log(`[JS] ${tag}:`, data);
-  } catch (e) {
-    console.log(`[JS] ${tag}: <log failed>`, e);
-  }
+// 如果识别结果里拿不到姓名，可以维护映射（示例）
+const NAME_BY_ID: Record<number, string> = {
+  1: '张三',
+  2: '李四',
 };
 
-type FaceBox = {trackId: number; rect: {x: number; y: number; width: number; height: number}};
+function getCameraPermissionConst() {
+  return Platform.select({
+    ios: PERMISSIONS.IOS.CAMERA,
+    android: PERMISSIONS.ANDROID.CAMERA,
+    default: PERMISSIONS.ANDROID.CAMERA,
+  });
+}
 
-export default function FaceShowScreen() {
-  const [hasPermission, setHasPermission] = useState(false);
-  const [faces, setFaces] = useState<FaceBox[]>([]);
+// worklet：轻量节流日志
+function shouldLog(ts: number) {
+  'worklet';
+  return Math.floor(ts / 1e9) % 1 === 0 && ts % 1e9 < 2e7;
+}
+
+type FaceBoxUI = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  id: number; // 这里用 trackId，当作识别 id（你可替换成 personId）
+  name?: string;
+};
+
+type FaceBoxBuf = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  trackId: number;
+};
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
+/**
+ * 把“buffer 坐标(landscape)”映射到“屏幕 Canvas 坐标(portrait)”。
+ * 处理：
+ * 1) 先按 90°旋转（landscape -> portrait）
+ * 2) 再按 Camera 的 cover 规则缩放/裁切
+ * 3) 前置镜像（mirror）
+ */
+function mapBufRectToView(
+  b: FaceBoxBuf,
+  frameW: number,
+  frameH: number,
+  viewW: number,
+  viewH: number,
+  mirror: boolean
+) {
+  // rotated buffer size (portrait)
+  const rotatedW = frameH;
+  const rotatedH = frameW;
+
+  // rotate clockwise:
+  // x' = y
+  // y' = frameW - (x + w)
+  // w' = h
+  // h' = w
+  const xP = b.y;
+  const yP = frameW - (b.x + b.width);
+  const wP = b.height;
+  const hP = b.width;
+
+  // cover scaling (same behavior as resizeMode="cover")
+  const scale = Math.max(viewW / rotatedW, viewH / rotatedH);
+  const scaledW = rotatedW * scale;
+  const scaledH = rotatedH * scale;
+  const offsetX = (viewW - scaledW) / 2;
+  const offsetY = (viewH - scaledH) / 2;
+
+  let x = xP * scale + offsetX;
+  let y = yP * scale + offsetY;
+  let w = wP * scale;
+  let h = hP * scale;
+
+  if (mirror) {
+    x = viewW - (x + w);
+  }
+
+  // 最后做一下边界保护
+  x = clamp(x, -viewW, viewW * 2);
+  y = clamp(y, -viewH, viewH * 2);
+  w = clamp(w, 0, viewW * 2);
+  h = clamp(h, 0, viewH * 2);
+
+  return { x, y, width: w, height: h };
+}
+
+export default function Example() {
   const device = useCameraDevice('front');
-  const {resize} = useResizePlugin();
+  const camera = useRef<Camera>(null);
+  const { resize } = useResizePlugin();
+  const [registeredFaces, setRegisteredFaces] = useState<FaceData[]>([]);
 
-  // ✅ Session & BoxedSession 只创建一次（不要放 render 里每次创建）
-  const BoxedSession = useMemo(() => {
-    const session = InspireFace.createSession(
+  // 注意：有些版本 useCameraFormat 对 device=null 也能工作；这里保持你原写法
+  const format = useCameraFormat(device, Templates.FrameProcessing);
+
+  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
+
+  // ✅ Canvas size：用 onSize（避免新架构 Canvas onLayout 警告）
+  const canvasSize = useSharedValue({ width: PREVIEW_W, height: PREVIEW_H });
+
+  // ✅ 字体：请换成你项目里真实存在的字体文件（建议带中文）
+  // Android 可以放到 assets/fonts/ 之类
+  const font = useFont(require('./assets/fonts/PingFangSC-Regular.ttf'), 18);
+
+  // JS state：Canvas 用它来画框
+  const [boxes, setBoxes] = useState<FaceBoxUI[]>([]);
+
+  // ====== 权限：react-native-permissions ======
+  useEffect(() => {
+    (async () => {
+      const perm = getCameraPermissionConst();
+      if (!perm) {
+        setHasPermission(false);
+        return;
+      }
+
+      const st0 = await check(perm);
+      if (st0 === RESULTS.GRANTED || st0 === RESULTS.LIMITED) {
+        setHasPermission(true);
+        return;
+      }
+
+      const st1 = await request(perm);
+      setHasPermission(st1 === RESULTS.GRANTED || st1 === RESULTS.LIMITED);
+
+      // 应用启动时加载持久化数据
+      const jsonString = storage.getString('registeredFaces');
+      if (jsonString) {
+        setRegisteredFaces(JSON.parse(jsonString));
+      }
+    })();
+  }, []);
+
+  // ✅ Session 只创建一次，并 box 起来让 worklet 可用
+  const boxedSession = useMemo(() => {
+    const s = InspireFace.createSession(
       {
         enableRecognition: true,
         enableFaceQuality: true,
@@ -68,188 +217,291 @@ export default function FaceShowScreen() {
       -1,
       -1
     );
-    session.setTrackPreviewSize(TRACK_W);
-    session.setFaceDetectThreshold(0.5);
-
-    logJs('Session created', {trackPreviewSize: TRACK_W, threshold: 0.5});
-    return NitroModules.box(session);
+    s.setTrackPreviewSize(320);
+    s.setFaceDetectThreshold(0.5);
+    return NitroModules.box(s);
   }, []);
 
-  useEffect(() => {
-    (async () => {
-      const status = await Camera.requestCameraPermission();
-      setHasPermission(status === 'granted');
-      logJs('Camera permission', status);
-    })();
+  // ✅ 用 Worklets.createRunOnJS 回 JS 更新 boxes（不要在 frameProcessor 里直接 setState）
+  const reportFacesToJS = useMemo(() => {
+    return Worklets.createRunOnJS(
+      (payload: { frameW: number; frameH: number; faces: FaceBoxBuf[] }) => {
+        const { frameW, frameH, faces } = payload;
+
+        // 前置镜像：你 resize 里 mirror:true，这里也镜像一次保证和预览一致
+        const mirror = true;
+
+        const next = faces.map((b) => {
+          const mapped = mapBufRectToView(
+            b,
+            frameW,
+            frameH,
+            PREVIEW_W,
+            PREVIEW_H,
+            mirror
+          );
+
+          const id = b.trackId; // ✅ 先用 trackId；你有 personId 时替换这里
+          const name = NAME_BY_ID[id] ?? '';
+
+          return {
+            ...mapped,
+            id,
+            name,
+          };
+        });
+
+        setBoxes(next);
+      }
+    );
   }, []);
-
-  // ✅ JS 线程更新 state
-  const onFacesJS = useCallback((payload: {faces: FaceBox[]; meta: any}) => {
-    const {faces: newFaces, meta} = payload;
-    setFaces(newFaces);
-
-    // 限频日志：每秒最多一次（meta.secKey）
-    if (DEBUG_JS) {
-      logJs(`Faces update (count=${newFaces.length})`, {
-        secKey: meta?.secKey,
-        resizedH: meta?.resizedH,
-        scaleX: meta?.scaleX,
-        scaleY: meta?.scaleY,
-        first: newFaces[0] ?? null,
-      });
-    }
-  }, []);
-
-  // ✅ worklet -> JS 的桥（你之前跑通的那套）
-  const reportFaces = useMemo(() => Worklets.createRunOnJS(onFacesJS), [onFacesJS]);
 
   const frameProcessor = useFrameProcessor(
     (frame) => {
       'worklet';
 
-      // 建议 10~15fps；30fps + JS 回调很容易淹没
       runAtTargetFps(15, () => {
         'worklet';
 
-        // 用 timestamp 做一个“秒级 key”给日志限频
-        const secKey = Math.floor(frame.timestamp / 1e9);
+        const size = 320;
+
+        // 你之前的换算逻辑保留：square(320) -> buffer(landscape)
+        const frameWidth = frame.height; // 你原逻辑：拿 height 当“可视宽”
+        const scaleX = frameWidth / size;
+        const cropOffset = (frame.width - frame.height) / 2;
 
         let bitmap: any = null;
         let imageStream: any = null;
 
         try {
-          // --- 1) resize 到 TRACK_W ---
-          const resizedH = Math.floor((TRACK_W * frame.height) / frame.width);
           const resized = resize(frame, {
-            scale: {width: TRACK_W, height: resizedH},
+            scale: { width: size, height: size },
+            rotation: '90deg',
             pixelFormat: 'bgr',
             dataType: 'uint8',
+            mirror: true,
           });
 
-          const buffer = resized.buffer as ArrayBuffer;
-
-          // --- 2) bitmap + imageStream ---
           const unboxedInspireFace = BoxedInspireFace.unbox();
-          bitmap = unboxedInspireFace.createImageBitmapFromBuffer(buffer, TRACK_W, resizedH, 3);
-
-          // 你这里先固定 ROTATION_0；如果框方向不对，再按 frame.orientation 映射
+          bitmap = unboxedInspireFace.createImageBitmapFromBuffer(
+            resized.buffer as ArrayBuffer,
+            size,
+            size,
+            3
+          );
           imageStream = unboxedInspireFace.createImageStreamFromBitmap(
             bitmap,
             CameraRotation.ROTATION_0
           );
 
-          // --- 3) executeFaceTrack ---
-          const unboxedSession = BoxedSession.unbox();
-          const raw = unboxedSession.executeFaceTrack(imageStream);
+          const session = boxedSession.unbox();
+          const faces: FaceData[] = session.executeFaceTrack(imageStream);
 
-          // --- 4) 清洗 & 坐标映射到 PREVIEW 像素 ---
-          const scaleX = PREVIEW_W / TRACK_W;
-          const scaleY = PREVIEW_H / resizedH;
-
-          const safeFaces: FaceBox[] = (Array.isArray(raw) ? raw : []).map((f: any) => {
-            const trackId = Number(f?.trackId ?? 0);
-
-            // 原始像素坐标（相对于 TRACK_W x resizedH）
-            let x = Number(f?.rect?.x ?? 0);
-            const y = Number(f?.rect?.y ?? 0);
-            const w = Number(f?.rect?.width ?? 0);
-            const h = Number(f?.rect?.height ?? 0);
-
-            // 前摄镜像（让框和预览一致）
-            if (MIRROR_X) {
-              x = TRACK_W - (x + w);
-            }
-
-            // 映射到预览像素
-            return {
-              trackId,
-              rect: {
-                x: x * scaleX,
-                y: y * scaleY,
-                width: w * scaleX,
-                height: h * scaleY,
-              },
-            };
-          });
-
-          if (DEBUG_WORKLET && secKey % 2 === 0) {
-            console.log('[Worklet] tracked faces:', safeFaces.length);
+          if (shouldLog(frame.timestamp)) {
+            console.log(
+              '[Worklet] faces.length =',
+              Array.isArray(faces) ? faces.length : -1
+            );
           }
 
-          // --- 5) 回到 JS 更新 state ---
-          reportFaces({
-            faces: safeFaces,
-            meta: {secKey, resizedH, scaleX, scaleY, frameW: frame.width, frameH: frame.height},
+          const out: FaceBoxBuf[] = [];
+
+          if (Array.isArray(faces)) {
+            for (let i = 0; i < faces.length; i++) {
+              const f = faces[i];
+              if (!f) continue;
+              const r = f.rect;
+              if (!r) continue;
+              const feature = session.extractFaceFeature(imageStream, f.token);
+              const searched =
+                unboxedInspireFace.featureHubFaceSearch(feature);
+              let name = 'Unknown';
+              let resultText = '';
+              if (
+                searched &&
+                searched.confidence &&
+                searched.confidence > 0.6
+              ) {
+                const registeredFace = registeredFaces.find(
+                  (face) => face.id === searched.id
+                );
+                if (registeredFace) {
+                  //识别成功
+                  name = registeredFace.name;
+                  resultText = `识别到：${name} (${(
+                    searched.confidence * 100
+                  ).toFixed(1)}%)`;
+                }
+              }
+              // 兼容：rect 可能是 0~1 归一化，也可能是 0~320 像素
+              let rx = Number(r.x ?? 0);
+              let ry = Number(r.y ?? 0);
+              let rw = Number(r.width ?? 0);
+              let rh = Number(r.height ?? 0);
+
+              if (rw <= 1.5 && rh <= 1.5) {
+                rx *= size;
+                ry *= size;
+                rw *= size;
+                rh *= size;
+              }
+
+              // 你 landmarks 的逻辑是 point.y -> x，point.x -> y
+              // rect 同样做 swap
+              const xBuf = ry * scaleX + cropOffset;
+              const yBuf = rx * scaleX;
+              const wBuf = rh * scaleX;
+              const hBuf = rw * scaleX;
+
+              out.push({
+                x: xBuf,
+                y: yBuf,
+                width: wBuf,
+                height: hBuf,
+                trackId: Number(f.trackId ?? 0),
+              });
+            }
+          }
+
+          // ✅ 回 JS 更新 Canvas 框
+          reportFacesToJS({
+            frameW: frame.width,
+            frameH: frame.height,
+            faces: out,
           });
         } catch (e: any) {
-          // worklet 内尽量只打关键信息
-          console.error('[Worklet] FaceTrack error:', e?.message ?? String(e));
-          reportFaces({
-            faces: [],
-            meta: {secKey, error: e?.message ?? String(e)},
-          });
+          console.error('[Worklet] FaceTrack crash:', e?.message ?? e);
         } finally {
-          // --- 6) 释放 ---
+          try {
+            imageStream?.dispose?.();
+          } catch {}
           try {
             bitmap?.dispose?.();
-            imageStream?.dispose?.();
           } catch {}
         }
       });
     },
-    [resize, BoxedSession, reportFaces]
+    [resize, boxedSession, reportFacesToJS, registeredFaces]
   );
 
-  if (!hasPermission || !device) {
+  // ===== UI 状态 =====
+  if (hasPermission === null) {
     return (
-      <View style={styles.root}>
-        <Text style={styles.errorText}>
-          {!hasPermission ? '正在请求相机权限...' : '未找到前置摄像头'}
+      <View style={styles.container}>
+        <ActivityIndicator size="large" color="#ffffff" />
+        <Text style={styles.text}>Requesting camera permission...</Text>
+      </View>
+    );
+  }
+
+  if (!hasPermission) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.text}>
+          Camera permission not granted (or blocked).
+        </Text>
+        <Text
+          style={[styles.text, { marginTop: 12 }]}
+          onPress={() => openSettings()}
+        >
+          Open Settings
         </Text>
       </View>
     );
   }
 
+  if (!device) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.text}>No camera device found.</Text>
+      </View>
+    );
+  }
+
+  // ===== 主界面 =====
   return (
-    <View style={styles.root}>
+    <View style={styles.view}>
       <Camera
-        style={[StyleSheet.absoluteFill, {width: PREVIEW_W, height: PREVIEW_H}]}
+        ref={camera}
+        style={[
+          StyleSheet.absoluteFill,
+          { width: PREVIEW_W, height: PREVIEW_H },
+        ]}
         device={device}
         isActive={true}
+        format={format}
         frameProcessor={frameProcessor}
-        pixelFormat="yuv"
+        resizeMode="cover"
       />
 
-      {faces.map((f) => (
-        <View
-          key={String(f.trackId)}
-          style={[
-            styles.box,
-            {
-              left: f.rect.x,
-              top: f.rect.y,
-              width: f.rect.width,
-              height: f.rect.height,
-            },
-          ]}>
-          <Text style={styles.label}>ID:{f.trackId}</Text>
-        </View>
-      ))}
+      {/* ✅ Canvas 叠加层（SkiaDemoScreen 的方式） */}
+      <Canvas
+        style={[
+          StyleSheet.absoluteFill,
+          { width: PREVIEW_W, height: PREVIEW_H },
+        ]}
+        onSize={canvasSize}
+      >
+        {boxes.map((b) => {
+          const label = b.name ? `ID:${b.id}  ${b.name}` : `ID:${b.id}`;
+
+          const padX = 6;
+          const padY = 4;
+          const textW = font ? font.getTextWidth(label) + padX * 2 : 120;
+          const textH = font ? font.getSize() + padY * 2 + 6 : 24;
+
+          const bgX = b.x;
+          const bgY = Math.max(0, b.y - textH - 6);
+
+          return (
+            <React.Fragment
+              key={`${b.id}-${Math.round(b.x)}-${Math.round(b.y)}`}
+            >
+              {/* 框（stroke） */}
+              <Rect
+                x={b.x}
+                y={b.y}
+                width={b.width}
+                height={b.height}
+                color="#00FF00"
+                style="stroke"
+                strokeWidth={3}
+              />
+
+              {/* label 背景 */}
+              <Rect
+                x={bgX}
+                y={bgY}
+                width={textW}
+                height={textH}
+                color="rgba(0,255,0,0.85)"
+              />
+
+              {/* label 文字 */}
+              {font ? (
+                <SkiaText
+                  x={bgX + padX}
+                  y={bgY + textH - padY - 4}
+                  text={label}
+                  font={font}
+                  color="#000000"
+                />
+              ) : null}
+            </React.Fragment>
+          );
+        })}
+      </Canvas>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: {flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center'},
-  box: {position: 'absolute', borderWidth: 2, borderColor: '#00FF00'},
-  label: {
-    position: 'absolute',
-    top: -18,
-    left: 0,
-    backgroundColor: '#00FF00',
-    color: '#000',
-    fontSize: 12,
-    paddingHorizontal: 4,
+  container: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'black',
   },
-  errorText: {color: 'white', fontSize: 18},
+  text: { color: 'white', fontSize: 16, marginTop: 10 },
+  view: { flex: 1, backgroundColor: 'black' },
 });
