@@ -11,7 +11,7 @@ import {
   BoxedInspireFace,
   DetectMode,
   CameraRotation,
-  type Face,
+  type Face, AssetManager,
 } from 'react-native-nitro-inspire-face';
 import { NitroModules } from 'react-native-nitro-modules';
 import { useResizePlugin } from 'vision-camera-resize-plugin';
@@ -29,22 +29,26 @@ export default function FaceShowScreen() {
   const device = useCameraDevice('front');
   const { resize } = useResizePlugin();
 
-  // 一次性初始化 InspireFace Session
-  const boxedInspireFaceSession = useRef(
-    (() => {
-      InspireFace.launch('Pikachu');
-      const session = InspireFace.createSession(
-        { enableLiveness: true },
-        DetectMode.ALWAYS_DETECT,
-        10,
-        -1, // Detection resolution level (multiple of 160, default -1 means 320)
-        -1  // Frame rate for tracking mode (default -1 means 30fps)
-      );
-      session.setTrackPreviewSize(320);
-      session.setFaceDetectThreshold(0.5);
-      return NitroModules.box(session);
-    })()
-  ).current;
+
+  const session = InspireFace.createSession(
+    {
+      enableRecognition: true,
+      enableFaceQuality: true,
+      enableFaceAttribute: true,
+      enableInteractionLiveness: true,
+      enableLiveness: true,
+      enableMaskDetect: true,
+    },
+    DetectMode.ALWAYS_DETECT,
+    10,
+    -1,
+    -1
+  );
+  session.setTrackPreviewSize(320);
+  session.setFaceDetectThreshold(0.5);
+
+  const BoxedSession = NitroModules.box(session);
+
 
   useEffect(() => {
     (async () => {
@@ -52,9 +56,9 @@ export default function FaceShowScreen() {
       setHasPermission(status === 'granted');
     })();
     // 组件卸载时清理 Session
-    return () => { boxedInspireFaceSession.unbox()?.dispose(); };
-  }, [boxedInspireFaceSession]);
-
+    return () => {   };
+  }, []);
+  const BoxedAssetManager = NitroModules.box(AssetManager);
   const frameProcessor = useFrameProcessor(
     (frame) => {
       'worklet';
@@ -63,7 +67,7 @@ export default function FaceShowScreen() {
       const setFacesJS = runOnJS(setFaces);
 
       // 以较低的帧率运行消耗资源的人脸检测
-      runAtTargetFps(15, () => {
+      runAtTargetFps(30, () => {
         try {
 
           // 使用 resize 插件转换帧的尺寸和像素格式
@@ -80,12 +84,12 @@ export default function FaceShowScreen() {
           // 使用转换后的 buffer 和尺寸创建 bitmap
           const bitmap = unboxedInspireFace.createImageBitmapFromBuffer(buffer, 320, 320, 3);
           const imageStream = unboxedInspireFace.createImageStreamFromBitmap(bitmap, CameraRotation.ROTATION_0);
-
-          const unboxedSession = boxedInspireFaceSession.unbox();
+          const unboxedSession = BoxedSession.unbox();
           const multipleFaceData = unboxedSession.executeFaceTrack(imageStream);
-          console.log('multipleFaceData:', multipleFaceData.length);
+          console.log('multipleFaceData:', JSON.stringify(multipleFaceData, null, 2));
+
           // 安全地更新 UI state 来绘制人脸框
-          // setFacesJS(multipleFaceData);
+          setFacesJS(multipleFaceData);
 
           bitmap.dispose();
           imageStream.dispose();
@@ -94,7 +98,7 @@ export default function FaceShowScreen() {
         }
       });
     },
-    [resize, boxedInspireFaceSession]
+    [resize, BoxedSession]
   );
 
   if (!hasPermission || !device) {
