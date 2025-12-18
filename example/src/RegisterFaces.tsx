@@ -8,20 +8,13 @@ import {
   SafeAreaView,
   ActivityIndicator,
 } from 'react-native';
-import { MMKV } from 'react-native-mmkv';
 import type {RegisteredFacesDTO} from "./dto/DlxTypes";
-
-// 初始化用于读取数据的 MMKV 实例
-const faceIdMappingStorage = new MMKV({
-  id: 'face-id-mapping-storage',
-});
-const userInfoCacheStorage = new MMKV({
-  id: 'user-info-cache-storage',
-});
+import {faceIdMappingStorage, userInfoCacheStorage} from "./GlobalStorage";
 
 
 
-const RegisteredFacesScreen = () => {
+
+const RegisterFaces = () => {
   const [faces, setFaces] = useState<RegisteredFacesDTO[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -146,4 +139,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default RegisteredFacesScreen;
+export default RegisterFaces;

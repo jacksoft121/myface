@@ -4,8 +4,8 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { Alert } from 'react-native'; // 导入 Alert
 
 import LoginScreen from './LoginScreen';
-import ArcSoftInfoScreen from './ArcSoftInfoScreen';
-import RegisteredFacesScreen from './RegisteredFacesScreen';
+import SettingFace from './SettingFace';
+import RegisterFaces from './RegisterFaces';
 import FaceShowScreen from './FaceShow';
 import { SkiaDemoScreen } from './SkiaDemoScreen';
 
@@ -15,7 +15,7 @@ import {
   PrimaryKeyMode,
 } from 'react-native-nitro-inspire-face'; // 导入 InspireFace 及其相关枚举
 
-// 定义 RootStackParamList 类型，以匹配 ArcSoftInfoScreen 中的定义
+// 定义 RootStackParamList 类型，以匹配 SettingFace 中的定义
 export type RootStackParamList = {
   Login: undefined;
   ArcSoftInfo: undefined;
@@ -60,12 +60,12 @@ export default function App() {
         />
         <Stack.Screen
           name="ArcSoftInfo"
-          component={ArcSoftInfoScreen}
+          component={SettingFace}
           options={{ title: '人脸识别设置' }}
         />
         <Stack.Screen
           name="RegisteredFaces"
-          component={RegisteredFacesScreen}
+          component={RegisterFaces}
           options={{ title: '已注册的人脸' }}
         />
         <Stack.Screen

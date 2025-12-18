@@ -82,7 +82,7 @@ const RECOGNITION_PARAMS_KEY = 'recognition_params';
 // Helper to force UI update
 const yieldToMain = () => new Promise(resolve => setTimeout(resolve, 0));
 
-const ArcSoftInfoScreen = () => {
+const SettingFace = () => {
   const navigation = useNavigation<ArcSoftInfoScreenNavigationProp>();
   const [typetext, setTypetext] = useState('');
   const [outDataInfo, setOutDataInfo] = useState({ data2: [] });
@@ -886,4 +886,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default ArcSoftInfoScreen;
+export default SettingFace;

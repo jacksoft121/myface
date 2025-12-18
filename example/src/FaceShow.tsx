@@ -124,7 +124,7 @@ export default function FaceShow() {
   const format = useCameraFormat(device, Templates.FrameProcessing);
   const canvasSize = useSharedValue({ width: PREVIEW_W, height: PREVIEW_H });
   const font = useFont(require('./assets/fonts/PingFangSC-Regular.ttf'), 18);
-
+  const [cameraInitialized, setCameraInitialized] = useState(false);
   useEffect(() => {
     (async () => {
       const perm = getCameraPermissionConst();
@@ -325,10 +325,12 @@ export default function FaceShow() {
         ref={camera}
         style={StyleSheet.absoluteFill}
         device={device}
-        isActive={true}
+        isActive={cameraInitialized}
         format={format}
         frameProcessor={frameProcessor}
+        frameProcessorFps={5}
         resizeMode="cover"
+        onInitialized={() => setCameraInitialized(true)}
       />
       <Canvas style={StyleSheet.absoluteFill} onSize={canvasSize}>
         {boxes.map((b) => {
