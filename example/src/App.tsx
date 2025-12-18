@@ -9,6 +9,7 @@ import RegisterFaces from './RegisterFaces';
 import FaceShowScreen from './FaceShow';
 import { SkiaDemoScreen } from './SkiaDemoScreen';
 import Apptest from './Apptest'; // 导入 Apptest
+import RealTimeRecognitionScreen from './RealTimeRecognitionScreen'; // 导入 RealTimeRecognitionScreen
 
 import {
   InspireFace,
@@ -30,6 +31,7 @@ export type RootStackParamList = {
   };
   SkiaDemo: undefined;
   Apptest: undefined; // 添加 Apptest
+  RealTimeRecognition: undefined; // 添加 RealTimeRecognition
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -84,6 +86,11 @@ export default function App() {
           name="Apptest"
           component={Apptest}
           options={{ title: 'Apptest' }}
+        />
+        <Stack.Screen
+          name="RealTimeRecognition"
+          component={RealTimeRecognitionScreen}
+          options={{ title: '实时识别' }}
         />
       </Stack.Navigator>
     </NavigationContainer>

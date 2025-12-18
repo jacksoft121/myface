@@ -46,27 +46,19 @@ interface FaceData {
   imageUri: string;
 }
 
-interface FaceBox extends Face {
-  name?: string;
-  color: string;
-}
-
 const { width: screenWidth } = Dimensions.get('window');
 const PREVIEW_WIDTH = screenWidth - 40;
 const PREVIEW_HEIGHT = 300;
 
-export default function App() {
+export default function App({ navigation }) {
   const [activeTab, setActiveTab] = useState('photoRegister');
   const [name, setName] = useState('');
   const [registeredFaces, setRegisteredFaces] = useState<FaceData[]>([]);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [recognitionResult, setRecognitionResult] = useState<string>('');
   const [cameraType, setCameraType] = useState<'front' | 'back'>('front');
-  const [isCameraActive, setIsCameraActive] = useState(false);
-  const [realTimeResult, setRealTimeResult] = useState<string>('');
   const [session, setSession] = useState<any>(null);
   const [cameraPermission, setCameraPermission] = useState<CameraPermissionStatus>();
-  const [faceBoxes, setFaceBoxes] = useState<FaceBox[]>([]);
 
   const cameraRef = useRef<Camera>(null);
   const devices = useCameraDevices();
@@ -116,87 +108,6 @@ export default function App() {
           newSession.setFaceDetectThreshold(0.5);
           newSession.setFilterMinimumFacePixelSize(0);
           setSession(newSession);
-
-          for (let j = 0; j < 1; j++) {
-            const bitmap = InspireFace.createImageBitmapFromFilePath(
-              3,
-              `${AssetManager.getFilesDirectory()}/kun.jpg`
-            );
-            const imageStream = InspireFace.createImageStreamFromBitmap(
-              bitmap,
-              CameraRotation.ROTATION_90
-            );
-            imageStream.setFormat(ImageFormat.BGR);
-            imageStream.setRotation(CameraRotation.ROTATION_0);
-            const multipleFaceData = newSession.executeFaceTrack(imageStream);
-            console.log('multipleFaceData', multipleFaceData.length);
-            if (multipleFaceData.length > 0 && multipleFaceData[0]) {
-              console.log(multipleFaceData[0].rect);
-              const lmk = InspireFace.getFaceDenseLandmarkFromFaceToken(
-                multipleFaceData[0].token
-              );
-              console.log('lmk', lmk.length);
-              const feature = newSession.extractFaceFeature(
-                imageStream,
-                multipleFaceData[0].token
-              );
-              for (let i = 0; i < 10; i++) {
-                const result = InspireFace.featureHubFaceInsert({
-                  id: -1,
-                  feature,
-                });
-                console.log('result', result);
-              }
-              console.log('Feature size: ', feature.byteLength);
-              const searched = InspireFace.featureHubFaceSearch(feature);
-              if (searched) {
-                console.log(
-                  'searched',
-                  searched.id,
-                  'confidence',
-                  searched.confidence
-                );
-              }
-              const topKResults = InspireFace.featureHubFaceSearchTopK(
-                feature,
-                10
-              );
-              console.log('topKResults', topKResults.length);
-              topKResults.forEach((result) => {
-                console.log(
-                  'TopK id: ',
-                  result.id,
-                  'Confidence: ',
-                  result.confidence
-                );
-              });
-              const newFeature = new Float32Array(InspireFace.featureLength)
-                .buffer;
-
-              const identity: FaceFeatureIdentity = {
-                id: 8,
-                feature: newFeature,
-              };
-              const updateSuccess = InspireFace.featureHubFaceUpdate(identity);
-              if (updateSuccess) {
-                console.log('Update feature success: ' + 8);
-              } else {
-                console.log('Update feature failed: ' + 8);
-                try {
-                    const newerSession = InspireFace.createSession(
-                      { enableRecognition: true, enableFaceQuality: true, enableFaceAttribute: true, enableInteractionLiveness: true, enableLiveness: true, enableMaskDetect: true },
-                      DetectMode.ALWAYS_DETECT, 10, -1, -1
-                    );
-                    newerSession.setTrackPreviewSize(320);
-                    newerSession.setFaceDetectThreshold(0.5);
-                    newerSession.setFilterMinimumFacePixelSize(0);
-                    setSession(newerSession);
-                } catch(e) {
-                    console.error('初始化会话失败:', e);
-                }
-              }
-            }
-          }
         } catch (error) {
           console.error('初始化会话失败:', error);
         }
@@ -326,71 +237,6 @@ export default function App() {
     }
   };
 
-  const startRealTimeRecognition = () => {
-    setIsCameraActive(true);
-    setRealTimeResult('开始实时识别...');
-  };
-
-  const stopRealTimeRecognition = () => {
-    setIsCameraActive(false);
-    setRealTimeResult('');
-    setFaceBoxes([]);
-  };
-
-  const processRealTimeFrame = async () => {
-    if (!isCameraActive || !cameraRef.current || !session) return;
-    try {
-      const photo = await cameraRef.current.takeSnapshot({ quality: 85 });
-      if (photo.path) {
-        const bitmap = InspireFace.createImageBitmapFromFilePath(3, photo.path);
-        const imageStream = InspireFace.createImageStreamFromBitmap(bitmap, CameraRotation.ROTATION_0);
-        imageStream.setFormat(ImageFormat.BGR);
-        const multipleFaceData = session.executeFaceTrack(imageStream);
-        const newFaceBoxes: FaceBox[] = [];
-        let resultText = '未检测到人脸';
-
-        if (multipleFaceData.length > 0) {
-          resultText = '检测到人脸，但未识别';
-          for (const face of multipleFaceData) {
-            const feature = session.extractFaceFeature(imageStream, face.token);
-            const searched = InspireFace.featureHubFaceSearch(feature);
-            let name = 'Unknown';
-            let color = '#FF0000';
-            if (searched && searched.confidence && searched.confidence > 0.6) {
-              const registeredFace = registeredFaces.find(f => f.id === searched.id);
-              if (registeredFace) {
-                name = registeredFace.name;
-                color = '#00FF00';
-                resultText = `识别到：${name} (${(searched.confidence * 100).toFixed(1)}%)`;
-              }
-            }
-            const imageAspectRatio = photo.width / photo.height;
-            const previewAspectRatio = PREVIEW_WIDTH / PREVIEW_HEIGHT;
-            let scale, offsetX = 0, offsetY = 0;
-            if (imageAspectRatio > previewAspectRatio) {
-              scale = PREVIEW_HEIGHT / photo.height;
-              offsetX = ((photo.width * scale) - PREVIEW_WIDTH) / 2;
-            } else {
-              scale = PREVIEW_WIDTH / photo.width;
-              offsetY = ((photo.height * scale) - PREVIEW_HEIGHT) / 2;
-            }
-            newFaceBoxes.push({ ...face, rect: { x: face.rect.x * scale - offsetX, y: face.rect.y * scale - offsetY, width: face.rect.width * scale, height: face.rect.height * scale }, name, color });
-          }
-        }
-        setFaceBoxes(newFaceBoxes);
-        setRealTimeResult(resultText);
-        imageStream.dispose();
-        bitmap.dispose();
-      }
-    } catch (error) {
-      console.error('实时识别错误:', error);
-    } finally {
-      if (isCameraActive) {
-        setTimeout(processRealTimeFrame, 500);
-      }
-    }
-  };
-
   const handleDeleteFace = (id: number) => {
     Alert.alert("确认删除", "你确定要删除这张人脸吗？", [
       { text: "取消", style: "cancel" },
@@ -417,12 +263,6 @@ export default function App() {
       }
     ]);
   };
-
-  useEffect(() => {
-    if (isCameraActive) {
-        processRealTimeFrame();
-    }
-  }, [isCameraActive]);
 
   const toggleCamera = () => setCameraType(prev => prev === 'front' ? 'back' : 'front');
 
@@ -481,25 +321,6 @@ export default function App() {
             {recognitionResult ? <View style={styles.resultContainer}><Text style={styles.resultText}>{recognitionResult}</Text></View> : null}
           </View>
         );
-      case 'realTimeRecognition':
-        return (
-          <View style={styles.tabContent}>
-            <Text style={styles.title}>实时人脸识别</Text>
-            <View style={styles.cameraContainer}>
-              {device && <Camera ref={cameraRef} style={styles.camera} device={device} isActive={isFocused && isCameraActive} photo={true} />}
-              {faceBoxes.map((box, index) => (
-                <View key={index} style={[styles.faceBox, { left: box.rect.x, top: box.rect.y, width: box.rect.width, height: box.rect.height, borderColor: box.color }]}>
-                  <Text style={[styles.faceBoxName, { backgroundColor: box.color }]}>{box.name}</Text>
-                </View>
-              ))}
-            </View>
-            <View style={styles.cameraControls}>
-              <TouchableOpacity style={styles.cameraButton} onPress={toggleCamera}><Text style={styles.cameraButtonText}>切换摄像头</Text></TouchableOpacity>
-              {!isCameraActive ? <TouchableOpacity style={[styles.cameraButton, styles.primaryButton]} onPress={startRealTimeRecognition}><Text style={styles.cameraButtonText}>开始识别</Text></TouchableOpacity> : <TouchableOpacity style={[styles.cameraButton, styles.dangerButton]} onPress={stopRealTimeRecognition}><Text style={styles.cameraButtonText}>停止识别</Text></TouchableOpacity>}
-            </View>
-            {realTimeResult ? <View style={styles.resultContainer}><Text style={styles.resultText}>{realTimeResult}</Text></View> : null}
-          </View>
-        );
       default:
         return null;
     }
@@ -511,7 +332,7 @@ export default function App() {
         <TouchableOpacity style={[styles.tab, activeTab === 'photoRegister' && styles.activeTab]} onPress={() => setActiveTab('photoRegister')}><Text style={styles.tabText}>图片录入</Text></TouchableOpacity>
         <TouchableOpacity style={[styles.tab, activeTab === 'cameraRegister' && styles.activeTab]} onPress={() => setActiveTab('cameraRegister')}><Text style={styles.tabText}>摄像头录入</Text></TouchableOpacity>
         <TouchableOpacity style={[styles.tab, activeTab === 'photoRecognition' && styles.activeTab]} onPress={() => setActiveTab('photoRecognition')}><Text style={styles.tabText}>图片识别</Text></TouchableOpacity>
-        <TouchableOpacity style={[styles.tab, activeTab === 'realTimeRecognition' && styles.activeTab]} onPress={() => setActiveTab('realTimeRecognition')}><Text style={styles.tabText}>实时识别</Text></TouchableOpacity>
+        <TouchableOpacity style={[styles.tab, styles.primaryButton]} onPress={() => navigation.navigate('RealTimeRecognition')}><Text style={styles.tabText}>实时识别</Text></TouchableOpacity>
       </View>
       <ScrollView style={styles.content}>{renderTabContent()}</ScrollView>
     </View>
@@ -519,9 +340,10 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
+  container: { flex: 1, backgroundColor: '#f5f5f5' },
+  error: {
+    color: 'red',
+    marginTop: 10,
   },
   tabBar: { flexDirection: 'row', backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#ddd' },
   tab: { flex: 1, paddingVertical: 12, alignItems: 'center' },
@@ -552,6 +374,4 @@ const styles = StyleSheet.create({
   faceTime: { fontSize: 12, color: '#666', marginTop: 2 },
   deleteButton: { backgroundColor: '#FF3B30', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 6 },
   deleteButtonText: { color: '#fff', fontSize: 12 },
-  faceBox: { position: 'absolute', borderWidth: 2, borderRadius: 4 },
-  faceBoxName: { position: 'absolute', top: -20, left: 0, color: '#fff', fontSize: 12, paddingHorizontal: 4, paddingVertical: 2, borderRadius: 2 },
 });
