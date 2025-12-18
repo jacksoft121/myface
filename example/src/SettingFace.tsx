@@ -29,13 +29,13 @@ import {
 } from 'react-native-nitro-inspire-face';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { getCurrentUser } from './User';
+import { getCurrentUser } from './comm/User';
 import type { RegisteredFacesDTO } from './dto/DlxTypes';
 import {
   recognitionStorage,
   faceIdMappingStorage,
   userInfoCacheStorage,
-} from './GlobalStorage';
+} from './comm/GlobalStorage';
 
 // #region Type Definitions
 type RootStackParamList = {

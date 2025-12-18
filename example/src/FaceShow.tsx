@@ -8,6 +8,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { useIsFocused } from '@react-navigation/native'; // 导入 useIsFocused
 
 import {
   BoxedInspireFace,
@@ -41,8 +42,8 @@ import { Canvas, Rect, Text as SkiaText, useFont } from '@shopify/react-native-s
 import { useSharedValue } from 'react-native-reanimated';
 import { type RegisteredFacesDTO, type FaceBoxBuf, type FaceBoxUI } from './dto/DlxTypes';
 
-import { STORAGE_KEYS, userInfoCacheStorage } from './GlobalStorage';
-import { log, logPerformance } from './logger';
+import { STORAGE_KEYS, userInfoCacheStorage } from './comm/GlobalStorage';
+import { log, logPerformance } from './comm/logger';
 
 // #region Constants
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -111,6 +112,7 @@ export default function FaceShow() {
   const camera = useRef<Camera>(null);
   const { resize } = useResizePlugin();
   const [registeredFacesMap, setRegisteredFacesMap] = useState(new Map<number, string>());
+  const [hubFaceCount, setHubFaceCount] = useState(0); // 新增 State
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [boxes, setBoxes] = useState<FaceBoxUI[]>([]);
   const [recognizedPerson, setRecognizedPerson] = useState<{ id: number, name: string, confidence: number } | null>(null);
@@ -119,48 +121,58 @@ export default function FaceShow() {
   const canvasSize = useSharedValue({ width: PREVIEW_W, height: PREVIEW_H });
   const font = useFont(require('./assets/fonts/PingFangSC-Regular.ttf'), 18);
   const [cameraInitialized, setCameraInitialized] = useState(false);
+  const isFocused = useIsFocused();
 
   useEffect(() => {
-    (async () => {
-      const perm = getCameraPermissionConst();
-      if (!perm) {
-        setHasPermission(false);
-        return;
-      }
-      const st0 = await check(perm);
-      if (st0 === RESULTS.GRANTED || st0 === RESULTS.LIMITED) {
-        setHasPermission(true);
-      } else {
-        const st1 = await request(perm);
-        setHasPermission(st1 === RESULTS.GRANTED || st1 === RESULTS.LIMITED);
-      }
+    const loadData = async () => {
+      if (isFocused) {
+        const perm = getCameraPermissionConst();
+        if (!perm) {
+          setHasPermission(false);
+          return;
+        }
+        const st0 = await check(perm);
+        if (st0 === RESULTS.GRANTED || st0 === RESULTS.LIMITED) {
+          setHasPermission(true);
+        } else {
+          const st1 = await request(perm);
+          setHasPermission(st1 === RESULTS.GRANTED || st1 === RESULTS.LIMITED);
+        }
 
-      const allKeys = userInfoCacheStorage.getAllKeys();
-      const newMap = new Map<number, string>();
+        const allKeys = userInfoCacheStorage.getAllKeys();
+        const newMap = new Map<number, string>();
 
-      for (const key of allKeys) {
-        try {
-          const jsonString = userInfoCacheStorage.getString(key);
-          if (jsonString) {
-            if (key === STORAGE_KEYS.REGISTERED_FACES) {
-              const faces: RegisteredFacesDTO[] = JSON.parse(jsonString);
-              for (const face of faces) {
-                newMap.set(face.faceId, face.name);
-              }
-            } else {
-              const userData: RegisteredFacesDTO = JSON.parse(jsonString);
-              if (userData?.faceId && userData.name) {
-                newMap.set(userData.faceId, userData.name);
+        for (const key of allKeys) {
+          try {
+            const jsonString = userInfoCacheStorage.getString(key);
+            if (jsonString) {
+              if (key === STORAGE_KEYS.REGISTERED_FACES) {
+                const faces: RegisteredFacesDTO[] = JSON.parse(jsonString);
+                for (const face of faces) {
+                  newMap.set(face.faceId, face.name);
+                }
+              } else {
+                const userData: RegisteredFacesDTO = JSON.parse(jsonString);
+                if (userData?.faceId && userData.name) {
+                  newMap.set(userData.faceId, userData.name);
+                }
               }
             }
+          } catch (e) {
+            console.warn(`Error parsing data for key "${key}":`, e);
           }
-        } catch (e) {
-          console.warn(`Error parsing data for key "${key}":`, e);
         }
+        setRegisteredFacesMap(newMap);
+
+        // 从 FeatureHub 获取真实数量
+        const count = InspireFace.featureHubGetFaceCount();
+        setHubFaceCount(count);
+        log(`Reloaded ${newMap.size} faces on focus. Hub count: ${count}`);
       }
-      setRegisteredFacesMap(newMap);
-    })();
-  }, []);
+    };
+
+    loadData();
+  }, [isFocused]);
 
   const boxedSession = useMemo(() => {
     const s = InspireFace.createSession(
@@ -169,7 +181,7 @@ export default function FaceShow() {
         enableFaceQuality: true,
       },
       DetectMode.ALWAYS_DETECT,
-      10, -1, -1
+      5, -1, -1
     );
     s.setTrackPreviewSize(320);
     s.setFaceDetectThreshold(0.5);
@@ -238,6 +250,11 @@ export default function FaceShow() {
             );
 
             const unboxedInspireFace = BoxedInspireFace.unbox();
+            bitmap = logPerformance('featureHubGetFaceCount count', () => {
+                const count = unboxedInspireFace.featureHubGetFaceCount();
+                console.log('featureHubGetFaceCount count =', count);
+              }
+            );
             bitmap = logPerformance('Create bitmap', () =>
               unboxedInspireFace.createImageBitmapFromBuffer(resized.buffer as ArrayBuffer, size, size, 3)
             );
@@ -260,6 +277,10 @@ export default function FaceShow() {
 
                   const feature = session.extractFaceFeature(imageStream, f.token);
                   const searched = unboxedInspireFace.featureHubFaceSearch(feature);
+
+                  if (searched) {
+                    log(`[Debug] Searched Result - ID: ${searched.id}, Confidence: ${searched.confidence}`);
+                  }
 
                   let name = '未注册';
                   let confidence = 0;
@@ -344,7 +365,7 @@ export default function FaceShow() {
           ref={camera}
           style={StyleSheet.absoluteFill}
           device={device}
-          isActive={cameraInitialized}
+          isActive={isFocused && cameraInitialized}
           format={format}
           frameProcessor={frameProcessor}
           resizeMode="cover"
@@ -381,7 +402,7 @@ export default function FaceShow() {
           {font && (
             <React.Fragment>
               <Rect x={PREVIEW_W - 160} y={20} width={150} height={30} color="rgba(0,0,0,0.5)" />
-              <SkiaText x={PREVIEW_W - 150} y={45} text={`已注册人数: ${registeredFacesMap.size}`} font={font} color="#FFFFFF" />
+              <SkiaText x={PREVIEW_W - 150} y={45} text={`已注册人数: ${hubFaceCount}`} font={font} color="#FFFFFF" />
             </React.Fragment>
           )}
         </Canvas>

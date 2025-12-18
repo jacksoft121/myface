@@ -1,5 +1,5 @@
-import { config } from './config';
-import {getCurrentUser} from "./User";
+import { config } from './comm/config';
+import {getCurrentUser} from "./comm/User";
 
 export const apiFind = async (func: string,params: Record<string, any>) => {
   const currentUser = getCurrentUser();

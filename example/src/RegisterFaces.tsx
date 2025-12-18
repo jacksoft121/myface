@@ -9,7 +9,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import type {RegisteredFacesDTO} from "./dto/DlxTypes";
-import {faceIdMappingStorage, userInfoCacheStorage} from "./GlobalStorage";
+import {faceIdMappingStorage, userInfoCacheStorage} from "./comm/GlobalStorage";
 
 
 
