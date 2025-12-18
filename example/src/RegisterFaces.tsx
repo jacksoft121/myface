@@ -7,6 +7,7 @@ import {
   Image,
   SafeAreaView,
   ActivityIndicator,
+  Button,
 } from 'react-native';
 import type {RegisteredFacesDTO} from "./dto/DlxTypes";
 import {faceIdMappingStorage, userInfoCacheStorage} from "./comm/GlobalStorage";
@@ -14,7 +15,7 @@ import {faceIdMappingStorage, userInfoCacheStorage} from "./comm/GlobalStorage";
 
 
 
-const RegisterFaces = () => {
+const RegisterFaces = ({navigation}) => {
   const [faces, setFaces] = useState<RegisteredFacesDTO[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -76,6 +77,7 @@ const RegisterFaces = () => {
 
   return (
     <SafeAreaView style={styles.container}>
+      <Button title="注册" onPress={() => navigation.navigate('Apptest')} />
       {faces.length === 0 ? (
         <View style={styles.centered}>
           <Text>没有已注册的人脸信息</Text>

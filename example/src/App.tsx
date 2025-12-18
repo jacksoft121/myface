@@ -8,6 +8,7 @@ import SettingFace from './SettingFace';
 import RegisterFaces from './RegisterFaces';
 import FaceShowScreen from './FaceShow';
 import { SkiaDemoScreen } from './SkiaDemoScreen';
+import Apptest from './Apptest'; // 导入 Apptest
 
 import {
   InspireFace,
@@ -28,6 +29,7 @@ export type RootStackParamList = {
     facePreviewSize: string;
   };
   SkiaDemo: undefined;
+  Apptest: undefined; // 添加 Apptest
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -38,8 +40,8 @@ export default function App() {
       InspireFace.launch('Pikachu');
       InspireFace.featureHubDataEnable({
         enablePersistence: true,
-        persistenceDbPath: 'inspireface.db',
-        searchThreshold: 0.5, // 优化后的搜索阈值
+        persistenceDbPath: 'dlx_szstg.db',
+        searchThreshold: 0.42, // 优化后的搜索阈值
         searchMode: SearchMode.EXHAUSTIVE,
         primaryKeyMode: PrimaryKeyMode.AUTO_INCREMENT,
       });
@@ -77,6 +79,11 @@ export default function App() {
           name="SkiaDemo"
           component={SkiaDemoScreen}
           options={{ title: 'Skia Demo' }}
+        />
+        <Stack.Screen
+          name="Apptest"
+          component={Apptest}
+          options={{ title: 'Apptest' }}
         />
       </Stack.Navigator>
     </NavigationContainer>
