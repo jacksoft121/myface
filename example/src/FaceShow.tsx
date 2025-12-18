@@ -37,6 +37,7 @@ import {
 } from 'react-native-permissions';
 
 import { Worklets } from 'react-native-worklets-core';
+import {FaceBoxBuf, type FaceBoxUI, type RegisteredFacesDTO} from './dto/DlxTypes';
 
 // ✅ Skia 2.2.12：用 Canvas + Rect + Text（不要用 PaintStyle/MakeDefault）
 import {
@@ -59,11 +60,6 @@ const { width: WIN_W } = Dimensions.get('window');
 const PREVIEW_W = WIN_W;
 const PREVIEW_H = WIN_W * (16 / 9);
 
-// 如果识别结果里拿不到姓名，可以维护映射（示例）
-const NAME_BY_ID: Record<number, string> = {
-  1: '张三',
-  2: '李四',
-};
 
 function getCameraPermissionConst() {
   return Platform.select({
@@ -79,24 +75,7 @@ function shouldLog(ts: number) {
   return Math.floor(ts / 1e9) % 1 === 0 && ts % 1e9 < 2e7;
 }
 
-type FaceBoxUI = {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  id: number; // 这里用 trackId，当作识别 id（你可替换成 personId）
-  name?: string;
-  confidence?: number; // 添加置信度字段
-  isMatched?: boolean; // 添加匹配状态字段
-};
 
-type FaceBoxBuf = {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  trackId: number;
-};
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -160,7 +139,7 @@ export default function Example() {
   const device = useCameraDevice('front');
   const camera = useRef<Camera>(null);
   const { resize } = useResizePlugin();
-  const [registeredFaces, setRegisteredFaces] = useState<FaceData[]>([]);
+  const [registeredFaces, setRegisteredFaces] = useState<RegisteredFacesDTO[]>([]);
 
   // 注意：有些版本 useCameraFormat 对 device=null 也能工作；这里保持你原写法
   const format = useCameraFormat(device, Templates.FrameProcessing);
@@ -196,7 +175,7 @@ export default function Example() {
       setHasPermission(st1 === RESULTS.GRANTED || st1 === RESULTS.LIMITED);
 
       // 应用启动时加载持久化数据
-      const jsonString = storage.getString('registeredFaces');
+      const jsonString = storage.getString('RegisteredFacesDTO');
       if (jsonString) {
         setRegisteredFaces(JSON.parse(jsonString));
       }
@@ -210,9 +189,9 @@ export default function Example() {
         enableRecognition: true,
         enableFaceQuality: true,
         enableFaceAttribute: true,
-        enableInteractionLiveness: true,
-        enableLiveness: true,
-        enableMaskDetect: true,
+        enableInteractionLiveness: false,
+        enableLiveness: false,
+        enableMaskDetect: false,
       },
       DetectMode.ALWAYS_DETECT,
       10,
@@ -221,6 +200,10 @@ export default function Example() {
     );
     s.setTrackPreviewSize(320);
     s.setFaceDetectThreshold(0.5);
+    // 性能和效果优化
+    s.setTrackModeSmoothRatio(0.7); // 平滑系数，让跟踪框更稳定
+    s.setTrackModeDetectInterval(10); // 每10帧检测一次，降低CPU负载
+    s.setFilterMinimumFacePixelSize(50); // 过滤掉小于50像素的小人脸
     return NitroModules.box(s);
   }, []);
 
@@ -243,13 +226,10 @@ export default function Example() {
             mirror
           );
 
-          const id = b.trackId; // ✅ 先用 trackId；你有 personId 时替换这里
-          const name = NAME_BY_ID[id] ?? '';
-
+          const id = b.trackId;
           return {
             ...mapped,
             id,
-            name,
             // 传递置信度和匹配状态到UI层
             confidence: b.confidence,
             isMatched: b.isMatched,
@@ -265,7 +245,7 @@ export default function Example() {
     (frame) => {
       'worklet';
 
-      runAtTargetFps(15, () => {
+      runAtTargetFps(30, () => {
         'worklet';
 
         const size = 320;
@@ -313,15 +293,13 @@ export default function Example() {
 
           if (Array.isArray(faces)) {
             for (let i = 0; i < faces.length; i++) {
-              const f = faces[i];
+              const f = faces[i] as any; // 临时转换为 any
               if (!f) continue;
               const r = f.rect;
               if (!r) continue;
               const feature = session.extractFaceFeature(imageStream, f.token);
-              const searched =
-                unboxedInspireFace.featureHubFaceSearch(feature);
-              let name = 'Unknown';
-              let resultText = '';
+              const searched = unboxedInspireFace.featureHubFaceSearch(feature);
+              let name = '未注册';
               let confidence = 0;
               let isMatched = false;
 
@@ -331,14 +309,11 @@ export default function Example() {
                 searched.confidence > 0.6
               ) {
                 const registeredFace = registeredFaces.find(
-                  (face) => face.id === searched.id
+                  (face) => face.faceId === searched.id
                 );
                 if (registeredFace) {
                   //识别成功
                   name = registeredFace.name;
-                  resultText = `识别到：${name} (${(
-                    searched.confidence * 100
-                  ).toFixed(1)}%)`;
                   confidence = searched.confidence;
                   isMatched = true;
                 }
@@ -459,14 +434,16 @@ export default function Example() {
           // 构造显示标签：如果有人名则显示ID和姓名，否则只显示ID
           // 如果有置信度信息，则添加到标签中
           let label = b.name ? `ID:${b.id}  ${b.name}` : `ID:${b.id}`;
-          if (b.confidence !== undefined) {
+          if (b.confidence !== undefined && b.confidence > 0) {
             label += ` (${(b.confidence * 100).toFixed(1)}%)`;
           }
 
           // 根据匹配状态确定颜色：绿色表示匹配，红色表示未匹配
-          const boxColor = b.isMatched ? "#00FF00" : "#FF0000";
-          const bgColor = b.isMatched ? "rgba(0,255,0,0.85)" : "rgba(255,0,0,0.85)";
-          const textColor = b.isMatched ? "#000000" : "#FFFFFF";
+          const boxColor = b.isMatched ? '#00FF00' : '#FF0000';
+          const bgColor = b.isMatched
+            ? 'rgba(0,255,0,0.85)'
+            : 'rgba(255,0,0,0.85)';
+          const textColor = b.isMatched ? '#000000' : '#FFFFFF';
 
           // 计算标签背景的尺寸
           const padX = 6;
