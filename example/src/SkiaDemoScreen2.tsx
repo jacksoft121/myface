@@ -72,7 +72,7 @@ export const SkiaDemoScreen = () => {
       'worklet';
 
       // 只处理 15fps
-      runAtTargetFps(10, () => {
+      runAtTargetFps(15, () => {
         'worklet';
 
         // 每秒最多打印一次（worklet 侧用 timestamp 控制）
