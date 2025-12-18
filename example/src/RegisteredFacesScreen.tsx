@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { MMKV } from 'react-native-mmkv';
+import type {RegisteredFacesDTO} from "./dto/DlxTypes";
 
 // 初始化用于读取数据的 MMKV 实例
 const faceIdMappingStorage = new MMKV({
@@ -18,15 +19,10 @@ const userInfoCacheStorage = new MMKV({
   id: 'user-info-cache-storage',
 });
 
-interface RegisteredFace {
-  id: string; // 用户名, e.g., "33_T_刘家琳"
-  hubId: number;
-  name: string;
-  imageUrl: string;
-}
+
 
 const RegisteredFacesScreen = () => {
-  const [faces, setFaces] = useState<RegisteredFace[]>([]);
+  const [faces, setFaces] = useState<RegisteredFacesDTO[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -35,17 +31,17 @@ const RegisteredFacesScreen = () => {
       setLoading(true);
       try {
         const registeredUserNames = faceIdMappingStorage.getAllKeys();
-        const faceData: RegisteredFace[] = [];
+        const faceData: RegisteredFacesDTO[] = [];
 
         for (const userName of registeredUserNames) {
           const userInfoString = userInfoCacheStorage.getString(userName);
-          const hubId = faceIdMappingStorage.getNumber(userName);
+          const faceId = faceIdMappingStorage.getNumber(userName);
 
-          if (userInfoString && hubId) {
+          if (userInfoString && faceId) {
             const userInfo = JSON.parse(userInfoString);
             faceData.push({
               id: userName,
-              hubId: hubId,
+              faceId: faceId,
               name: userInfo.name,
               imageUrl: userInfo.imageUrl,
             });

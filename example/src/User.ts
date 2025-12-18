@@ -1,16 +1,13 @@
-import { MMKV } from 'react-native-mmkv';
 
-const storage = new MMKV({
-  id: 'login-credentials',
-});
+import { userStorage, STORAGE_KEYS } from './GlobalStorage';
 
-const STORAGE_KEYS = {
-  CURRENT_USER: 'current_user',
+const STORAGE_KEYS_LOCAL = {
+  CURRENT_USER: STORAGE_KEYS.CURRENT_USER,
 };
 
 export const getCurrentUser = () => {
   try {
-    const userJson = storage.getString(STORAGE_KEYS.CURRENT_USER);
+    const userJson = userStorage.getString(STORAGE_KEYS_LOCAL.CURRENT_USER);
     if (userJson) {
       return JSON.parse(userJson);
     }
@@ -20,3 +17,5 @@ export const getCurrentUser = () => {
     return null;
   }
 };
+
+// 如果还有其他使用存储的方法，也需要相应更新

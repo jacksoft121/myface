@@ -16,7 +16,6 @@ import {
   SafeAreaView,
   ActivityIndicator,
 } from 'react-native';
-import { MMKV } from 'react-native-mmkv';
 import Slider from '@react-native-community/slider';
 import RNFS from 'react-native-fs';
 import Clipboard from '@react-native-clipboard/clipboard';
@@ -27,17 +26,22 @@ import {
   type InspireFaceSession,
   CameraRotation,
   ImageFormat,
-} from 'react-native-nitro-inspire-face'; // 移除 SearchMode, PrimaryKeyMode
+} from 'react-native-nitro-inspire-face';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { getCurrentUser } from './User';
+import type { RegisteredFacesDTO } from './dto/DlxTypes';
+import {
+  recognitionStorage,
+  faceIdMappingStorage,
+  userInfoCacheStorage,
+} from './GlobalStorage';
 
 // #region Type Definitions
 type RootStackParamList = {
   Login: undefined;
   ArcSoftInfo: undefined;
   RegisteredFaces: undefined;
-  // 将 FaceRecognition 替换为 FaceShow
   FaceShow: {
     isFront: boolean;
     isLiveness: boolean;
@@ -71,35 +75,6 @@ type RecognitionParams = {
   faceQuality: number;
   facePreviewSize: string;
 };
-// #endregion
-
-// #region MMKV and InspireFace Initialization
-const recognitionStorage = new MMKV({
-  id: 'recognition-params-storage',
-});
-const faceVersionStorage = new MMKV({
-  id: 'face-version-storage',
-});
-const faceIdMappingStorage = new MMKV({
-  id: 'face-id-mapping-storage',
-});
-const userInfoCacheStorage = new MMKV({
-  id: 'user-info-cache-storage',
-});
-
-// 移除 InspireFace 的全局初始化代码
-// try {
-//   InspireFace.launch('Pikachu');
-//   InspireFace.featureHubDataEnable({
-//     enablePersistence: true,
-//     persistenceDbPath: 'inspireface.db',
-//     searchThreshold: 0.42, // 默认搜索阈值
-//     searchMode: SearchMode.EXHAUSTIVE,
-//     primaryKeyMode: PrimaryKeyMode.AUTO_INCREMENT,
-//   });
-// } catch (e) {
-//   Alert.alert('引擎启动失败', (e as Error).message);
-// }
 // #endregion
 
 const RECOGNITION_PARAMS_KEY = 'recognition_params';
@@ -335,14 +310,18 @@ const ArcSoftInfoScreen = () => {
             feature,
           });
           if (typeof faceId === 'number' && faceId !== -1) {
-            await updateProgress(`注册成功，用户: ${userName}, Face ID: ${faceId}`, 'success');
+            await updateProgress(`注册成功，学生用户: ${userName}, Face ID: ${faceId}`, 'success');
             faceIdMappingStorage.set(userName, faceId);
+            const registeredFace:RegisteredFacesDTO = {
+              id: student.ID,
+              role: "2",
+              faceId:faceId,
+              name: student.VCNAME,
+              imageUrl: student.VCIMGPATH
+            };
             userInfoCacheStorage.set(
               userName,
-              JSON.stringify({
-                name: student.VCNAME,
-                imageUrl: student.VCIMGPATH,
-              })
+              JSON.stringify(registeredFace)
             );
           } else {
             await updateProgress(`${userName} 的数据库插入失败`, 'error');
@@ -369,14 +348,18 @@ const ArcSoftInfoScreen = () => {
             feature,
           });
           if (typeof faceId === 'number' && faceId !== -1) {
-            await updateProgress(`注册成功，用户: ${userName}, Face ID: ${faceId}`, 'success');
+            await updateProgress(`注册成功，老师用户: ${userName}, Face ID: ${faceId}`, 'success');
             faceIdMappingStorage.set(userName, faceId);
+            const registeredFace:RegisteredFacesDTO = {
+              id: teacher.ID,
+              role: "1",
+              faceId:faceId,
+              name: teacher.VCNAME,
+              imageUrl: teacher.VCIMGPATH
+            };
             userInfoCacheStorage.set(
               userName,
-              JSON.stringify({
-                name: teacher.VCNAME,
-                imageUrl: teacher.VCIMGPATH,
-              })
+              JSON.stringify(registeredFace)
             );
           } else {
             await updateProgress(`${userName} 的数据库插入失败`, 'error');

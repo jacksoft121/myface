@@ -39,7 +39,7 @@ export default function App() {
       InspireFace.featureHubDataEnable({
         enablePersistence: true,
         persistenceDbPath: 'inspireface.db',
-        searchThreshold: 0.42, // 默认搜索阈值
+        searchThreshold: 0.5, // 优化后的搜索阈值
         searchMode: SearchMode.EXHAUSTIVE,
         primaryKeyMode: PrimaryKeyMode.AUTO_INCREMENT,
       });

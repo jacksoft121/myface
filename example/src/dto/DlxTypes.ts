@@ -1,10 +1,10 @@
+
 /**
  * 注册人脸数据 来自kkvm的registeredFaces
  */
 export type RegisteredFacesDTO = {
   id: number; // 对应业务的id 例如：学生id或老师id
   faceId:number;// 人脸特征id
-  hubId: number,
   name: string; //姓名
   role: string; // 角色 1=老师 2=学生
   timestamp?: number ;  //注册时间戳
