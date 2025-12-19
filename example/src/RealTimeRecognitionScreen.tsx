@@ -24,6 +24,7 @@ import {
   useCameraDevice,
   useFrameProcessor,
   runAtTargetFps,
+  type Frame,
 } from 'react-native-vision-camera';
 import { useResizePlugin } from 'vision-camera-resize-plugin';
 
@@ -110,13 +111,13 @@ function mapRectToViewContain(
 }
 
 // frame.rotation(优先) / frame.orientation(兜底) → rotationDegrees
-function getFrameRotationDegrees(frame: any) {
+function getFrameRotationDegrees(frame: Frame) {
   'worklet';
-  const r = frame?.rotation;
+  const r = frame.rotation;
   if (typeof r === 'number') return r; // 0/90/180/270
 
   // 兜底：orientation string
-  switch (frame?.orientation) {
+  switch (frame.orientation) {
     case 'portrait': return 0;
     case 'portrait-upside-down': return 180;
     case 'landscape-left': return 90;
@@ -300,6 +301,9 @@ export default function RealTimeRecognitionScreen() {
     upright: `0x0`,
   });
 
+  // 🔧 新增：防止重复初始化 Session
+  const sessionRef = useRef<any>(null);
+
   // 权限
   useFocusEffect(
     useCallback(() => {
@@ -316,52 +320,95 @@ export default function RealTimeRecognitionScreen() {
         }
       };
       requestPermission();
+
+      // 🔧 组件失焦时清理状态
+      return () => {
+        setIsCameraActive(false);
+        setBoxes([]);
+        smoothRef.current.clear();
+      };
     }, [])
   );
 
   // 同步注册库
   useEffect(() => {
-    if (!isFocused) return;
+    if (!isFocused || !hasPermission) return;
+
+    const loadRegisteredFaces = async () => {
+      try {
+        const allKeys = userInfoCacheStorage.getAllKeys();
+        let cnt = 0;
+
+        for (const key of allKeys) {
+          const jsonString = userInfoCacheStorage.getString(key);
+          if (!jsonString) continue;
+
+          if (key === STORAGE_KEYS.REGISTERED_FACES) {
+            const faces: RegisteredFacesDTO[] = JSON.parse(jsonString);
+            cnt += faces.length;
+          } else {
+            try {
+              const userData: RegisteredFacesDTO = JSON.parse(jsonString);
+              if (userData?.faceId && userData.name) cnt += 1;
+            } catch (e) {
+              log(`解析用户数据失败: ${key}`, e);
+            }
+          }
+        }
+
+        const hubCount = InspireFace.featureHubGetFaceCount();
+        setHubFaceCount(hubCount);
+        log(`Reloaded faces: ${cnt}, hubCount: ${hubCount}`);
+      } catch (e) {
+        console.warn('Reload faces error:', e);
+        log('Reload faces error:', e);
+      }
+    };
+
+    loadRegisteredFaces();
+  }, [isFocused, hasPermission]);
+
+  // 🔧 修复：Session 初始化逻辑（防止重复创建）
+  const boxedSession = useMemo(() => {
+    if (sessionRef.current) return sessionRef.current;
+
     try {
-      const allKeys = userInfoCacheStorage.getAllKeys();
-      let cnt = 0;
+      const s = InspireFace.createSession(
+        { enableRecognition: true, enableFaceQuality: true },
+        DetectMode.ALWAYS_DETECT,
+        5,
+        -1,
+        15 // 🔧 限制跟踪帧率，降低性能消耗
+      );
+      s.setTrackPreviewSize(320);
+      s.setFaceDetectThreshold(0.6); // 🔧 提高检测阈值，减少误检
+      s.setTrackModeSmoothRatio(0.7);
+      s.setTrackModeDetectInterval(10);
+      s.setFilterMinimumFacePixelSize(50);
 
-      for (const key of allKeys) {
-        const jsonString = userInfoCacheStorage.getString(key);
-        if (!jsonString) continue;
+      const boxed = NitroModules.box(s);
+      sessionRef.current = boxed;
+      return boxed;
+    } catch (e) {
+      log('创建 Session 失败:', e);
+      throw e;
+    }
+  }, []);
 
-        if (key === STORAGE_KEYS.REGISTERED_FACES) {
-          const faces: RegisteredFacesDTO[] = JSON.parse(jsonString);
-          cnt += faces.length;
-        } else {
-          const userData: RegisteredFacesDTO = JSON.parse(jsonString);
-          if (userData?.faceId && userData.name) cnt += 1;
+  // 🔧 修复：组件卸载时释放 Session
+  useEffect(() => {
+    return () => {
+      if (sessionRef.current) {
+        try {
+          const session = sessionRef.current.unbox();
+          session?.dispose();
+          sessionRef.current = null;
+        } catch (e) {
+          log('释放 Session 失败:', e);
         }
       }
-
-      const hubCount = InspireFace.featureHubGetFaceCount();
-      setHubFaceCount(hubCount);
-      log(`Reloaded faces: ${cnt}, hubCount: ${hubCount}`);
-    } catch (e) {
-      console.warn('Reload faces error:', e);
-    }
-  }, [isFocused]);
-
-  // Session（和 Kotlin 类似）
-  const boxedSession = useMemo(() => {
-    const s = InspireFace.createSession(
-      { enableRecognition: true, enableFaceQuality: true },
-      DetectMode.ALWAYS_DETECT,
-      5,
-      -1,
-      -1
-    );
-    s.setTrackPreviewSize(320);
-    s.setFaceDetectThreshold(0.5);
-    s.setTrackModeSmoothRatio(0.7);
-    s.setTrackModeDetectInterval(10);
-    s.setFilterMinimumFacePixelSize(50);
-    return NitroModules.box(s);
+      gAny.__IFACE_LAUNCHED = false;
+    };
   }, []);
 
   const format = useMemo(() => pickBestFormat(device), [device]);
@@ -369,7 +416,9 @@ export default function RealTimeRecognitionScreen() {
   // JS 平滑
   const smoothRef = useRef(new Map<number, FaceBoxUI>());
 
+  // 🔧 优化：防抖逻辑 + 类型安全
   const reportFacesToJS = useMemo(() => {
+    let lastReportTime = 0;
     return Worklets.createRunOnJS(
       (payload: {
         faceCount: number;
@@ -379,12 +428,10 @@ export default function RealTimeRecognitionScreen() {
         uprightH: number;
         faces: FaceBoxBuf[];
       }) => {
-        // 节流
+        // 防抖：66ms 内只更新一次（约15fps）
         const now = Date.now();
-        // @ts-ignore
-        if (global.__dlx_last_ui && now - global.__dlx_last_ui < 66) return;
-        // @ts-ignore
-        global.__dlx_last_ui = now;
+        if (now - lastReportTime < 66) return;
+        lastReportTime = now;
 
         setDebug({
           faceCount: payload.faceCount,
@@ -423,18 +470,20 @@ export default function RealTimeRecognitionScreen() {
           return ui;
         });
 
-        const alive = new Set(next.map((n) => n.id));
-        for (const k of Array.from(smoothRef.current.keys())) {
-          if (!alive.has(k)) smoothRef.current.delete(k);
-        }
+        // 清理过期的 trackId
+        const aliveIds = new Set(next.map((n) => n.id));
+        smoothRef.current.forEach((_, key) => {
+          if (!aliveIds.has(key)) smoothRef.current.delete(key);
+        });
 
         setBoxes(next);
       }
     );
   }, []);
 
+  // 🔧 核心修复：FrameProcessor 性能 + 错误处理 + 类型安全
   const frameProcessor = useFrameProcessor(
-    (frame) => {
+    (frame: Frame) => {
       'worklet';
 
       const g: any = globalThis as any;
@@ -442,7 +491,8 @@ export default function RealTimeRecognitionScreen() {
       g.__dlx_busy = true;
 
       try {
-        runAtTargetFps(30, () => {
+        // 🔧 降低处理帧率到15fps，平衡性能和体验
+        runAtTargetFps(15, () => {
           'worklet';
 
           let bitmap: any = null;
@@ -458,8 +508,21 @@ export default function RealTimeRecognitionScreen() {
               mirror: false,
             });
 
-            // 用 frame 的真实旋转告诉 InspireFace（仿 Kotlin：bitmap 可能已“转正”，但我们这里是“不转像素，转 rotation”）
-            const rotDeg = getFrameRotationDegrees(frame as any);
+            if (!resized || !resized.buffer) {
+              console.error('[Worklet] Resize 插件返回空数据');
+              reportFacesToJS({
+                faceCount: 0,
+                rotDeg: 0,
+                chosenMode: 0,
+                uprightW: SRC_W,
+                uprightH: SRC_H,
+                faces: [],
+              });
+              return;
+            }
+
+            // 用 frame 的真实旋转告诉 InspireFace
+            const rotDeg = getFrameRotationDegrees(frame);
             const camRot = toCameraRotation(rotDeg);
 
             // upright 尺寸（用于最终画框坐标系）
@@ -468,19 +531,52 @@ export default function RealTimeRecognitionScreen() {
             const uprightH = upright.h;
 
             const unboxed = BoxedInspireFace.unbox();
-            bitmap = unboxed.createImageBitmapFromBuffer(resized.buffer as ArrayBuffer, SRC_W, SRC_H, 3);
+            if (!unboxed) {
+              console.error('[Worklet] 无法获取 InspireFace 实例');
+              reportFacesToJS({
+                faceCount: 0,
+                rotDeg,
+                chosenMode: 0,
+                uprightW,
+                uprightH,
+                faces: [],
+              });
+              return;
+            }
+
+            // 🔧 修复：使用动态计算的尺寸创建 bitmap
+            bitmap = unboxed.createImageBitmapFromBuffer(
+              resized.buffer as ArrayBuffer,
+              SRC_W,
+              SRC_H,
+              3 // BGR 通道数
+            );
 
             imageStream = unboxed.createImageStreamFromBitmap(bitmap, camRot);
 
             const session = boxedSession.unbox();
+            if (!session) {
+              console.error('[Worklet] Session 未初始化');
+              reportFacesToJS({
+                faceCount: 0,
+                rotDeg,
+                chosenMode: 0,
+                uprightW,
+                uprightH,
+                faces: [],
+              });
+              return;
+            }
+
             const facesAny: any = session.executeFaceTrack(imageStream);
 
-            const faceCount =
-              facesAny && typeof facesAny.length === 'number'
-                ? facesAny.length
-                : facesAny && typeof facesAny.detectedNum === 'number'
-                  ? facesAny.detectedNum
-                  : 0;
+            // 🔧 兼容不同的返回格式
+            const faceCount = (() => {
+              if (!facesAny) return 0;
+              if (typeof facesAny.length === 'number') return facesAny.length;
+              if (typeof facesAny.detectedNum === 'number') return facesAny.detectedNum;
+              return 0;
+            })();
 
             if (faceCount <= 0) {
               reportFacesToJS({
@@ -498,13 +594,11 @@ export default function RealTimeRecognitionScreen() {
             const rawRects: { x: number; y: number; width: number; height: number }[] = [];
 
             for (let i = 0; i < faceCount && i < 3; i++) {
-              const f =
-                facesAny[i] ??
-                ({
-                  token: facesAny.tokens?.[i],
-                  rect: facesAny.rects?.[i],
-                  trackId: facesAny.trackIds?.[i] ?? facesAny.ids?.[i],
-                } as any);
+              const f = facesAny[i] ?? {
+                token: facesAny.tokens?.[i],
+                rect: facesAny.rects?.[i],
+                trackId: facesAny.trackIds?.[i] ?? facesAny.ids?.[i],
+              };
 
               if (!f?.rect) continue;
               rawRects.push(normalizeRectToPx(f.rect, SRC_W, SRC_H));
@@ -533,13 +627,11 @@ export default function RealTimeRecognitionScreen() {
             const out: FaceBoxBuf[] = [];
 
             for (let i = 0; i < faceCount; i++) {
-              const f =
-                facesAny[i] ??
-                ({
-                  token: facesAny.tokens?.[i],
-                  rect: facesAny.rects?.[i],
-                  trackId: facesAny.trackIds?.[i] ?? facesAny.ids?.[i],
-                } as any);
+              const f = facesAny[i] ?? {
+                token: facesAny.tokens?.[i],
+                rect: facesAny.rects?.[i],
+                trackId: facesAny.trackIds?.[i] ?? facesAny.ids?.[i],
+              };
 
               if (!f?.rect || !f?.token) continue;
 
@@ -547,19 +639,26 @@ export default function RealTimeRecognitionScreen() {
               const tr = transformRectMode(raw, SRC_W, SRC_H, bestMode);
 
               // ✅ 前摄：只在“画框坐标系”做镜像（与 <Camera isMirrored> 保持一致）
-              // 注意：VisionCamera 预览镜像只是显示层，不会改变 frame buffer；所以我们这里补齐镜像，否则会左右反。
-              const mirrorUI = (cameraType === 'front');
+              const mirrorUI = cameraType === 'front';
               let fx = tr.x;
               if (mirrorUI) fx = tr.outW - (tr.x + tr.width);
 
-              // clamp
+              // clamp 防止越界
               const bx = clamp(fx, -tr.outW, tr.outW * 2);
               const by = clamp(tr.y, -tr.outH, tr.outH * 2);
               const bw = clamp(tr.width, 0, tr.outW * 2);
               const bh = clamp(tr.height, 0, tr.outH * 2);
 
-              const feature = session.extractFaceFeature(imageStream, f.token);
-              const searched = unboxed.featureHubFaceSearch(feature);
+              // 🔧 增加错误处理：防止特征提取失败
+              let feature: any = null;
+              let searched: any = null;
+              try {
+                feature = session.extractFaceFeature(imageStream, f.token);
+                searched = unboxed.featureHubFaceSearch(feature);
+              } catch (e) {
+                console.error(`[Worklet] 提取特征失败: ${e?.message}`);
+                searched = { name: '识别失败', confidence: 0 };
+              }
 
               const name = searched?.name || '未注册';
               const confidence = searched?.confidence || 0;
@@ -574,7 +673,7 @@ export default function RealTimeRecognitionScreen() {
                 name,
                 confidence,
                 isMatched,
-              } as any);
+              });
             }
 
             reportFacesToJS({
@@ -586,10 +685,19 @@ export default function RealTimeRecognitionScreen() {
               faces: out,
             });
           } catch (e: any) {
-            console.error('[Worklet] FaceTrack crash:', e?.message ?? e);
+            console.error('[Worklet] FaceTrack 处理失败:', e?.message ?? e);
+            reportFacesToJS({
+              faceCount: 0,
+              rotDeg: 0,
+              chosenMode: 0,
+              uprightW: SRC_W,
+              uprightH: SRC_H,
+              faces: [],
+            });
           } finally {
-            try { imageStream?.dispose?.(); } catch {}
-            try { bitmap?.dispose?.(); } catch {}
+            // 🔧 确保资源释放
+            try { if (imageStream) imageStream.dispose(); } catch (e) {}
+            try { if (bitmap) bitmap.dispose(); } catch (e) {}
           }
         });
       } finally {
@@ -599,9 +707,24 @@ export default function RealTimeRecognitionScreen() {
     [resize, boxedSession, reportFacesToJS, cameraType]
   );
 
-  const toggleCamera = () => setCameraType((p) => (p === 'front' ? 'back' : 'front'));
-  const startRecognition = () => setIsCameraActive(true);
-  const stopRecognition = () => setIsCameraActive(false);
+  // 🔧 优化：切换摄像头时重置状态
+  const toggleCamera = useCallback(() => {
+    setCameraType((p) => (p === 'front' ? 'back' : 'front'));
+    setBoxes([]);
+    smoothRef.current.clear();
+  }, []);
+
+  const startRecognition = useCallback(() => {
+    if (cameraInitialized) {
+      setIsCameraActive(true);
+    }
+  }, [cameraInitialized]);
+
+  const stopRecognition = useCallback(() => {
+    setIsCameraActive(false);
+    setBoxes([]);
+    smoothRef.current.clear();
+  }, []);
 
   if (hasPermission === null) {
     return (
@@ -640,14 +763,21 @@ export default function RealTimeRecognitionScreen() {
         isActive={isFocused && cameraInitialized && isCameraActive}
         format={format}
         frameProcessor={frameProcessor}
-        frameProcessorFps={30}
+        frameProcessorFps={15} // 🔧 匹配处理帧率
         resizeMode="contain"
         zoom={0}
         isMirrored={cameraType === 'front'}
         onInitialized={() => setCameraInitialized(true)}
+        onError={(error) => {
+          log('Camera 错误:', error);
+          setIsCameraActive(false);
+        }}
       />
 
-      <Canvas style={StyleSheet.absoluteFill} onSize={canvasSize}>
+      {/* 🔧 修复：Canvas 尺寸同步 + 防止空渲染 */}
+      <Canvas style={StyleSheet.absoluteFill} onSize={(size) => {
+        canvasSize.value = size;
+      }}>
         {boxes.map((b) => {
           let label = b.name || `ID:${b.id}`;
           if (b.isMatched && b.confidence) label += ` (${(b.confidence * 100).toFixed(1)}%)`;
@@ -656,24 +786,39 @@ export default function RealTimeRecognitionScreen() {
           const bgColor = b.isMatched ? BG_GREEN : BG_RED;
           const textColor = b.isMatched ? COLOR_BLACK : COLOR_WHITE;
 
+          if (!font) return null;
+
           const padX = 6;
           const padY = 4;
-          const textW = font ? font.getTextWidth(label) + padX * 2 : 120;
-          const textH = font ? font.getSize() + padY * 2 + 6 : 24;
+          const textW = font.getTextWidth(label) + padX * 2;
+          const textH = font.getSize() + padY * 2 + 6;
           const bgX = b.x;
           const bgY = Math.max(0, b.y - textH - 6);
 
           return (
-            <React.Fragment key={`${b.id}-${Math.round(b.x)}-${Math.round(b.y)}`}>
-              <Rect x={b.x} y={b.y} width={b.width} height={b.height} color={boxColor} style="stroke" strokeWidth={3} />
+            <React.Fragment key={`face-box-${b.id}`}>
+              <Rect
+                x={b.x}
+                y={b.y}
+                width={b.width}
+                height={b.height}
+                color={boxColor}
+                style="stroke"
+                strokeWidth={3}
+              />
               <Rect x={bgX} y={bgY} width={textW} height={textH} color={bgColor} />
-              {font && (
-                <SkiaText x={bgX + padX} y={bgY + textH - padY - 4} text={label} font={font} color={textColor} />
-              )}
+              <SkiaText
+                x={bgX + padX}
+                y={bgY + textH - padY - 4}
+                text={label}
+                font={font}
+                color={textColor}
+              />
             </React.Fragment>
           );
         })}
 
+        {/* 调试信息 */}
         {font && (
           <>
             <Rect x={10} y={40} width={390} height={30} color={BG_BLACK50} />
@@ -724,6 +869,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 15,
     borderRadius: 30,
+    minWidth: 100,
+    alignItems: 'center',
   },
   buttonText: { color: 'white', fontSize: 16, fontWeight: 'bold' },
   primaryButton: { backgroundColor: 'rgba(0, 122, 255, 0.8)' },
