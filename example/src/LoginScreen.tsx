@@ -80,7 +80,7 @@ const LoginScreen: React.FC = () => {
     }
     storage.set(STORAGE_KEYS.CURRENT_USER, JSON.stringify(userData));
     // 使用导航替换当前屏幕
-    navigation.replace('ArcSoftInfo');
+    navigation.replace('SettingFace');
   };
 
   const handleLogin = async () => {

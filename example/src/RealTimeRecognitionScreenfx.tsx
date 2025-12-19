@@ -41,7 +41,7 @@ import { Canvas, Rect, Text as SkiaText, useFont } from '@shopify/react-native-s
 import { useSharedValue } from 'react-native-reanimated';
 
 import { type RegisteredFacesDTO, type FaceBoxBuf, type FaceBoxUI } from './dto/DlxTypes';
-import { DLX_CONFIG,STORAGE_KEYS, userInfoCacheStorage } from './comm/GlobalStorage';
+import { STORAGE_KEYS, userInfoCacheStorage } from './comm/GlobalStorage';
 import { log } from './comm/logger';
 
 // ===================== 镜像开关（只改这里） =====================
@@ -49,18 +49,13 @@ import { log } from './comm/logger';
 const MIRROR_ON_PREVIEW = true;
 const MIRROR_ON_OVERLAY = !MIRROR_ON_PREVIEW;
 
-// 调整人脸框位置：向上偏移比例（解决框偏下问题）
-const FACE_BOX_Y_OFFSET_RATIO = DLX_CONFIG.FACE_BOX_Y_OFFSET_RATIO;
-// 模型名称
-const INSPIREFACE_MODEL_NAME = DLX_CONFIG.INSPIREFACE_MODEL_NAME;
-
 // 极少数机型 SDK y 原点在左下角才需要（一般 false）
 const SDK_Y_ORIGIN_BOTTOM = false;
 
 // ===================== Launch once =====================
 const gAny: any = globalThis as any;
 if (!gAny.__IFACE_LAUNCHED) {
-  InspireFace.launch(INSPIREFACE_MODEL_NAME);
+  InspireFace.launch('Pikachu');
   gAny.__IFACE_LAUNCHED = true;
 }
 
@@ -68,8 +63,8 @@ if (!gAny.__IFACE_LAUNCHED) {
 const { width: PREVIEW_W, height: PREVIEW_H } = Dimensions.get('window');
 
 // ✅ 输入给 SDK 的稳定尺寸：永远 640x480
-const SRC_W = DLX_CONFIG.INSPIREFACE_SRC_W;
-const SRC_H = DLX_CONFIG.INSPIREFACE_SRC_H;
+const SRC_W = 640;
+const SRC_H = 480;
 
 // Skia colors
 const COLOR_GREEN = 0xff00ff00;
@@ -235,7 +230,7 @@ function baseRectToUprightSmart(
   return { ...best, mode: bestMode, anchor: 0 };
 }
 
-// ===================== 自动按 VisionCamera 实际预览比例映射（关键修复） =====================
+// ===================== 自动按 VisionCamera 实际预览比例映射（关键） =====================
 // format.videoWidth/videoHeight 是“传感器原始方向”尺寸；rotDeg 后 upright 可能互换
 function getUprightVideoSize(rotDeg: number, format: any) {
   const fw = Number(format?.videoWidth ?? 0);
@@ -247,64 +242,43 @@ function getUprightVideoSize(rotDeg: number, format: any) {
 }
 
 /**
- * ✅ 核心：rect(coordW/coordH) -> video(uprightW/uprightH) -> view(contain/cover)
- * Maps a rectangle from the processing coordinate system to the view's coordinate system.
+ * rect(coordW/coordH) -> video(uprightW/uprightH) -> view(contain)
+ * ✅ 解决：预览比例(16:9等)与检测坐标比例(4:3等)不一致导致的上下偏移
  */
-function mapRectToView(
+function mapRectToViewContainByVideo(
   b: { x: number; y: number; width: number; height: number },
   coordW: number,
   coordH: number,
   videoW: number,
   videoH: number,
   viewW: number,
-  viewH: number,
-  rotDeg: number,
-  isFrontCamera: boolean,
-  isAndroid: boolean,
-  resizeMode: 'contain' | 'cover' = 'contain' // 新增参数
+  viewH: number
 ) {
   'worklet';
 
-  // 1. Map from processing coordinates `(coordW, coordH)` to video coordinates `(videoW, videoH)`.
-  const videoX = (b.x / coordW) * videoW;
-  let videoY = (b.y / coordH) * videoH;
-  const videoW_ = (b.width / coordW) * videoW;
-  const videoH_ = (b.height / coordH) * videoH;
+  const scale = Math.min(viewW / videoW, viewH / videoH);
+  const scaledW = videoW * scale;
+  const scaledH = videoH * scale;
+  const offsetX = (viewW - scaledW) / 2;
+  const offsetY = (viewH - scaledH) / 2;
 
-  // 修复：在 90/270 度旋转时，Y 轴方向反了（用户反馈：人脸下移，框上移）
-  // 这种情况通常发生在 Android 前置摄像头上
-  const isRot90 = [90, 270].includes(((rotDeg % 360) + 360) % 360);
-  if (isAndroid && isRot90 && isFrontCamera) {
-    // 翻转 Y 轴: newY = H - (y + h)
-    videoY = videoH - (videoY + videoH_);
-  }
+  // coord -> video（按比例）
+  const vx = (b.x / coordW) * videoW;
+  const vy = (b.y / coordH) * videoH;
+  const vw = (b.width / coordW) * videoW;
+  const vh = (b.height / coordH) * videoH;
 
-  // 2. Map from video coordinates to view coordinates, respecting resizeMode.
-  let scale = 1;
-  let offsetX = 0;
-  let offsetY = 0;
-
-  if (resizeMode === 'cover') {
-    scale = Math.max(viewW / videoW, viewH / videoH);
-    offsetX = (viewW - videoW * scale) / 2;
-    offsetY = (viewH - videoH * scale) / 2;
-  } else {
-    // contain
-    scale = Math.min(viewW / videoW, viewH / videoH);
-    offsetX = (viewW - videoW * scale) / 2;
-    offsetY = (viewH - videoH * scale) / 2;
-  }
-
-  const viewX = videoX * scale + offsetX;
-  const viewY = videoY * scale + offsetY;
-  const viewW_ = videoW_ * scale;
-  const viewH_ = videoH_ * scale;
+  // video -> view
+  const x = vx * scale + offsetX;
+  const y = vy * scale + offsetY;
+  const w = vw * scale;
+  const h = vh * scale;
 
   return {
-    x: clamp(viewX, -viewW, viewW * 2),
-    y: clamp(viewY, -viewH, viewH * 2),
-    width: clamp(viewW_, 0, viewW * 2),
-    height: clamp(viewH_, 0, viewH * 2),
+    x: clamp(x, -viewW, viewW * 2),
+    y: clamp(y, -viewH, viewH * 2),
+    width: clamp(w, 0, viewW * 2),
+    height: clamp(h, 0, viewH * 2),
   };
 }
 
@@ -336,7 +310,6 @@ function pickBestFormat(device: any) {
 
 export default function RealTimeRecognitionScreen() {
   const [cameraType, setCameraType] = useState<'front' | 'back'>('front');
-  const [frameProcessorFps, setFrameProcessorFps] = useState(DLX_CONFIG.INSPIREFACE_FRAME_PROCESSOR_FPS);
   const device = useCameraDevice(cameraType);
   const camera = useRef<Camera>(null);
   const { resize } = useResizePlugin();
@@ -352,9 +325,6 @@ export default function RealTimeRecognitionScreen() {
   const [cameraInitialized, setCameraInitialized] = useState(false);
   const isFocused = useIsFocused();
 
-  // ✅ 定义当前的 resizeMode，方便统一修改
-  const CURRENT_RESIZE_MODE: 'contain' | 'cover' = 'cover';
-
   const [debug, setDebug] = useState({
     faceCount: 0,
     rotDeg: 0,
@@ -367,9 +337,6 @@ export default function RealTimeRecognitionScreen() {
 
   // Session 单例
   const sessionRef = useRef<any>(null);
-
-  // JS 平滑
-  const smoothRef = useRef(new Map<number, FaceBoxUI>());
 
   // 权限
   useFocusEffect(
@@ -443,11 +410,11 @@ export default function RealTimeRecognitionScreen() {
       -1,
       15
     );
-    s.setTrackPreviewSize(DLX_CONFIG.INSPIREFACE_SRC_W);
-    s.setFaceDetectThreshold(DLX_CONFIG.INSPIREFACE_FACE_DETECT_THRESHOLD);
-    s.setTrackModeSmoothRatio(DLX_CONFIG.INSPIREFACE_TRACK_MODE_SMOOTH_RATIO);
-    s.setTrackModeDetectInterval(DLX_CONFIG.INSPIREFACE_TRACK_MODE_DETECT_INTERVAL);
-    s.setFilterMinimumFacePixelSize(DLX_CONFIG.INSPIREFACE_FILTER_MINIMUM_FACE_PIXEL_SIZE);
+    s.setTrackPreviewSize(320);
+    s.setFaceDetectThreshold(0.6);
+    s.setTrackModeSmoothRatio(0.7);
+    s.setTrackModeDetectInterval(10);
+    s.setFilterMinimumFacePixelSize(50);
 
     const boxed = NitroModules.box(s);
     sessionRef.current = boxed;
@@ -471,6 +438,9 @@ export default function RealTimeRecognitionScreen() {
 
   const format = useMemo(() => pickBestFormat(device), [device]);
 
+  // JS 平滑
+  const smoothRef = useRef(new Map<number, FaceBoxUI>());
+
   const reportFacesToJS = useMemo(() => {
     let lastReportTime = 0;
 
@@ -483,7 +453,6 @@ export default function RealTimeRecognitionScreen() {
         coordW: number;
         coordH: number;
         faces: FaceBoxBuf[];
-        isFrontCamera: boolean;
       }) => {
         const now = Date.now();
         if (now - lastReportTime < 66) return;
@@ -507,26 +476,18 @@ export default function RealTimeRecognitionScreen() {
         });
 
         const alpha = 0.35;
-        const isAndroid = Platform.OS === 'android';
 
         const next: FaceBoxUI[] = payload.faces.map((b) => {
-          // ✅ 核心修复：传入旋转角度做精准映射
-          const mapped = mapRectToView(
+          // ✅ 自动按 format 比例映射到预览（解决上下不对齐）
+          const mapped = mapRectToViewContainByVideo(
             b,
             payload.coordW,
             payload.coordH,
             videoW,
             videoH,
             vw,
-            vh,
-            payload.rotDeg,
-            payload.isFrontCamera,
-            isAndroid,
-            CURRENT_RESIZE_MODE // 传入当前的 resizeMode
+            vh
           );
-
-          // 修正：整体上移，解决框偏下（眉毛到颈部）的问题
-          mapped.y -= mapped.height * FACE_BOX_Y_OFFSET_RATIO;
 
           const id = b.trackId ?? 0;
           const prev = smoothRef.current.get(id);
@@ -543,7 +504,7 @@ export default function RealTimeRecognitionScreen() {
           const ui: FaceBoxUI = {
             ...smoothed,
             id,
-            name: b.name || '',
+            name: b.name,
             confidence: b.confidence,
             isMatched: b.isMatched,
           };
@@ -571,12 +532,11 @@ export default function RealTimeRecognitionScreen() {
       g.__dlx_busy = true;
 
       try {
-        runAtTargetFps(frameProcessorFps, () => {
+        runAtTargetFps(15, () => {
           'worklet';
 
           let bitmap: any = null;
           let imageStream: any = null;
-          const isFront = cameraType === 'front';
 
           try {
             // ✅ resize 只做缩放，不旋转不镜像（保证 SDK 识别稳定）
@@ -589,7 +549,7 @@ export default function RealTimeRecognitionScreen() {
             });
 
             if (!resized?.buffer) {
-              reportFacesToJS({ faceCount: 0, rotDeg: 0, mode: 0, anchor: 0, coordW: SRC_W, coordH: SRC_H, faces: [], isFrontCamera: isFront });
+              reportFacesToJS({ faceCount: 0, rotDeg: 0, mode: 0, anchor: 0, coordW: SRC_W, coordH: SRC_H, faces: [] });
               return;
             }
 
@@ -602,7 +562,7 @@ export default function RealTimeRecognitionScreen() {
 
             const unboxed = BoxedInspireFace.unbox();
             if (!unboxed) {
-              reportFacesToJS({ faceCount: 0, rotDeg, mode: 0, anchor: 0, coordW: uprightW, coordH: uprightH, faces: [], isFrontCamera: isFront });
+              reportFacesToJS({ faceCount: 0, rotDeg, mode: 0, anchor: 0, coordW: uprightW, coordH: uprightH, faces: [] });
               return;
             }
 
@@ -611,7 +571,7 @@ export default function RealTimeRecognitionScreen() {
 
             const session = boxedSession.unbox();
             if (!session) {
-              reportFacesToJS({ faceCount: 0, rotDeg, mode: 0, anchor: 0, coordW: uprightW, coordH: uprightH, faces: [], isFrontCamera: isFront });
+              reportFacesToJS({ faceCount: 0, rotDeg, mode: 0, anchor: 0, coordW: uprightW, coordH: uprightH, faces: [] });
               return;
             }
 
@@ -625,7 +585,7 @@ export default function RealTimeRecognitionScreen() {
             })();
 
             if (faceCount <= 0) {
-              reportFacesToJS({ faceCount: 0, rotDeg, mode: 0, anchor: 0, coordW: uprightW, coordH: uprightH, faces: [], isFrontCamera: isFront });
+              reportFacesToJS({ faceCount: 0, rotDeg, mode: 0, anchor: 0, coordW: uprightW, coordH: uprightH, faces: [] });
               return;
             }
 
@@ -634,7 +594,7 @@ export default function RealTimeRecognitionScreen() {
             const coordH = uprightH;
 
             // ✅ 镜像只发生一次：看顶部开关
-            const mirrorUI = isFront && MIRROR_ON_OVERLAY;
+            const mirrorUI = (cameraType === 'front') && MIRROR_ON_OVERLAY;
 
             let chosenMode = 0;
             let chosenAnchor = 0;
@@ -705,10 +665,9 @@ export default function RealTimeRecognitionScreen() {
               coordW,
               coordH,
               faces: out,
-              isFrontCamera: isFront,
             });
           } catch {
-            reportFacesToJS({ faceCount: 0, rotDeg: 0, mode: 0, anchor: 0, coordW: SRC_W, coordH: SRC_H, faces: [], isFrontCamera: isFront });
+            reportFacesToJS({ faceCount: 0, rotDeg: 0, mode: 0, anchor: 0, coordW: SRC_W, coordH: SRC_H, faces: [] });
           } finally {
             try { if (imageStream) imageStream.dispose(); } catch {}
             try { if (bitmap) bitmap.dispose(); } catch {}
@@ -718,7 +677,7 @@ export default function RealTimeRecognitionScreen() {
         g.__dlx_busy = false;
       }
     },
-    [resize, boxedSession, reportFacesToJS, cameraType,frameProcessorFps]
+    [resize, boxedSession, reportFacesToJS, cameraType]
   );
 
   const toggleCamera = useCallback(() => {
@@ -774,8 +733,8 @@ export default function RealTimeRecognitionScreen() {
         isActive={isFocused && cameraInitialized && isCameraActive}
         format={format}
         frameProcessor={frameProcessor}
-        frameProcessorFps={DLX_CONFIG.INSPIREFACE_FRAME_PROCESSOR_FPS}
-        resizeMode={CURRENT_RESIZE_MODE} // 使用统一的 resizeMode
+        frameProcessorFps={15}
+        resizeMode="contain"
         zoom={0}
         // ✅ 镜像只在预览或画框二选一
         isMirrored={cameraType === 'front' && MIRROR_ON_PREVIEW}

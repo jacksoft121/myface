@@ -30,12 +30,13 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { getCurrentUser } from './comm/User';
-import type { RegisteredFacesDTO } from './dto/DlxTypes';
+import { recognitionStorage } from './comm/GlobalStorage';
 import {
-  recognitionStorage,
-  faceIdMappingStorage,
-  userInfoCacheStorage,
-} from './comm/GlobalStorage';
+  insertName,
+  queryUsersByOrgId,
+  deleteUsersByOrgId,
+  updateDlxUserByFaceId,
+} from './comm/FaceDB';
 
 // #region Type Definitions
 type RootStackParamList = {
@@ -276,17 +277,15 @@ const SettingFace = () => {
         return;
       }
 
-      // 2. 清空数据库
-      await updateProgress('正在清空本地数据库...');
-      const allKeys = faceIdMappingStorage.getAllKeys();
-      for (const key of allKeys) {
-        const hubId = faceIdMappingStorage.getNumber(key);
-        if (hubId) {
-          await InspireFace.featureHubFaceRemove(hubId);
-        }
+      // 2. 清空当前校区的旧数据
+      await updateProgress(`正在清空校区 "${selectedCampus.VCNAME}" 的旧数据...`);
+      const usersToDelete = await queryUsersByOrgId(String(selectedCampus.ID));
+      for (const user of usersToDelete) {
+        await InspireFace.featureHubFaceRemove(user.id);
       }
-      faceIdMappingStorage.clearAll();
-      userInfoCacheStorage.clearAll();
+      await deleteUsersByOrgId(String(selectedCampus.ID));
+      await updateProgress(`已删除 ${usersToDelete.length} 条旧记录。`);
+
 
       let currentCount = 0;
 
@@ -294,8 +293,8 @@ const SettingFace = () => {
       for (const student of studentsToRegister) {
         currentCount++;
         setProgressCurrent(currentCount);
-        const userName = `${student.ID}_${student.VCNAME}`;
-        await updateProgress(`处理中: ${userName}`);
+        const userName = `${student.VCNAME}`;
+        await updateProgress(`处理中 (学生): ${userName}`);
 
         const feature = await extractFeatureFromUrlSession(
           student.VCIMGPATH,
@@ -304,27 +303,25 @@ const SettingFace = () => {
         );
 
         if (feature) {
-          await updateProgress(`正在为 ${userName} 注册到数据库...`);
+          await updateProgress(`正在为 ${userName} 注册到人脸库...`);
           const faceId = await InspireFace.featureHubFaceInsert({
             id: -1,
             feature,
           });
           if (typeof faceId === 'number' && faceId !== -1) {
-            await updateProgress(`注册成功，学生用户: ${userName}, Face ID: ${faceId}`, 'success');
-            faceIdMappingStorage.set(userName, faceId);
-            const registeredFace:RegisteredFacesDTO = {
-              id: student.ID,
-              role: "2",
-              faceId:faceId,
-              name: student.VCNAME,
-              imageUrl: student.VCIMGPATH
-            };
-            userInfoCacheStorage.set(
-              userName,
-              JSON.stringify(registeredFace)
+            await updateProgress(`注册成功，Face ID: ${faceId}，正在写入数据库...`, 'success');
+            await insertName(
+              faceId,
+              String(student.ID),
+              student.VCNAME,
+              "2", // role: student
+              String(selectedCampus.ID),
+              selectedCampus.VCNAME,
+              student.VCIMGPATH
             );
+
           } else {
-            await updateProgress(`${userName} 的数据库插入失败`, 'error');
+            await updateProgress(`${userName} 的人脸库插入失败`, 'error');
           }
         }
       }
@@ -333,8 +330,8 @@ const SettingFace = () => {
       for (const teacher of teachersToRegister) {
         currentCount++;
         setProgressCurrent(currentCount);
-        const userName = `${teacher.ID}_T_${teacher.VCNAME}`;
-        await updateProgress(`处理中: ${userName}`);
+        const userName = `${teacher.VCNAME}`;
+        await updateProgress(`处理中 (老师): ${userName}`);
 
         const feature = await extractFeatureFromUrlSession(
           teacher.VCIMGPATH,
@@ -342,27 +339,25 @@ const SettingFace = () => {
           updateProgress
         );
         if (feature) {
-          await updateProgress(`正在为 ${userName} 注册到数据库...`);
+          await updateProgress(`正在为 ${userName} 注册到人脸库...`);
           const faceId = await InspireFace.featureHubFaceInsert({
             id: -1,
             feature,
           });
           if (typeof faceId === 'number' && faceId !== -1) {
-            await updateProgress(`注册成功，老师用户: ${userName}, Face ID: ${faceId}`, 'success');
-            faceIdMappingStorage.set(userName, faceId);
-            const registeredFace:RegisteredFacesDTO = {
-              id: teacher.ID,
-              role: "1",
-              faceId:faceId,
-              name: teacher.VCNAME,
-              imageUrl: teacher.VCIMGPATH
-            };
-            userInfoCacheStorage.set(
-              userName,
-              JSON.stringify(registeredFace)
-            );
+            await updateProgress(`注册成功，Face ID: ${faceId}，正在写入数据库...`, 'success');
+            await insertName(
+              faceId,
+              teacher.VCNAME,
+              String(teacher.ID),
+              teacher.VCNAME,
+              "1", // role: teacher
+              String(selectedCampus.ID),
+              selectedCampus.VCNAME,
+              teacher.VCIMGPATH);
+
           } else {
-            await updateProgress(`${userName} 的数据库插入失败`, 'error');
+            await updateProgress(`${userName} 的人脸库插入失败`, 'error');
           }
         }
       }
