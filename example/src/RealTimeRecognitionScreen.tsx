@@ -44,21 +44,32 @@ import { type RegisteredFacesDTO, type FaceBoxBuf, type FaceBoxUI } from './dto/
 import { STORAGE_KEYS, userInfoCacheStorage } from './comm/GlobalStorage';
 import { log } from './comm/logger';
 
-// ====== 只 launch 一次 ======
+// ===================== 镜像开关（只改这里） =====================
+// 方案A：镜像预览 + 画框不镜像（推荐）
+const MIRROR_ON_PREVIEW = true;
+const MIRROR_ON_OVERLAY = !MIRROR_ON_PREVIEW;
+
+// 调整人脸框位置：向上偏移比例（解决框偏下问题）
+const FACE_BOX_Y_OFFSET_RATIO = 0.2;
+
+// 极少数机型 SDK y 原点在左下角才需要（一般 false）
+const SDK_Y_ORIGIN_BOTTOM = false;
+
+// ===================== Launch once =====================
 const gAny: any = globalThis as any;
 if (!gAny.__IFACE_LAUNCHED) {
   InspireFace.launch('Pikachu');
   gAny.__IFACE_LAUNCHED = true;
 }
 
-// ====== 常量 ======
+// ===================== Const =====================
 const { width: PREVIEW_W, height: PREVIEW_H } = Dimensions.get('window');
 
-// 分析分辨率（和你 Kotlin 目标一致）
+// ✅ 输入给 SDK 的稳定尺寸：永远 640x480
 const SRC_W = 640;
 const SRC_H = 480;
 
-// Skia：用 number 色值
+// Skia colors
 const COLOR_GREEN = 0xff00ff00;
 const COLOR_RED = 0xffff0000;
 const BG_GREEN = 0xd900ff00;
@@ -67,7 +78,7 @@ const BG_BLACK50 = 0x80000000;
 const COLOR_WHITE = 0xffffffff;
 const COLOR_BLACK = 0xff000000;
 
-// ====== Permission ======
+// ===================== Permission =====================
 function getCameraPermissionConst() {
   return Platform.select({
     ios: PERMISSIONS.IOS.CAMERA,
@@ -76,47 +87,17 @@ function getCameraPermissionConst() {
   });
 }
 
-// ====== worklet-safe helpers ======
+// ===================== Worklet helpers =====================
 function clamp(n: number, min: number, max: number) {
   'worklet';
   return Math.max(min, Math.min(max, n));
 }
 
-// “图像坐标(srcW/srcH)” → “屏幕 contain 坐标”
-function mapRectToViewContain(
-  b: { x: number; y: number; width: number; height: number },
-  srcW: number,
-  srcH: number,
-  viewW: number,
-  viewH: number
-) {
-  'worklet';
-  const scale = Math.min(viewW / srcW, viewH / srcH);
-  const scaledW = srcW * scale;
-  const scaledH = srcH * scale;
-  const offsetX = (viewW - scaledW) / 2;
-  const offsetY = (viewH - scaledH) / 2;
-
-  const x = b.x * scale + offsetX;
-  const y = b.y * scale + offsetY;
-  const w = b.width * scale;
-  const h = b.height * scale;
-
-  return {
-    x: clamp(x, -viewW, viewW * 2),
-    y: clamp(y, -viewH, viewH * 2),
-    width: clamp(w, 0, viewW * 2),
-    height: clamp(h, 0, viewH * 2),
-  };
-}
-
-// frame.rotation(优先) / frame.orientation(兜底) → rotationDegrees
 function getFrameRotationDegrees(frame: Frame) {
   'worklet';
   const r = frame.rotation;
   if (typeof r === 'number') return r; // 0/90/180/270
 
-  // 兜底：orientation string
   switch (frame.orientation) {
     case 'portrait': return 0;
     case 'portrait-upside-down': return 180;
@@ -126,7 +107,6 @@ function getFrameRotationDegrees(frame: Frame) {
   }
 }
 
-// rotationDegrees → InspireFace CameraRotation
 function toCameraRotation(deg: number) {
   'worklet';
   const d = ((deg % 360) + 360) % 360;
@@ -136,104 +116,11 @@ function toCameraRotation(deg: number) {
   return CameraRotation.ROTATION_0;
 }
 
-// 给定 rotationDegrees，upright 的宽高
 function uprightSizeForRotation(deg: number) {
   'worklet';
   const d = ((deg % 360) + 360) % 360;
-  if (d === 90 || d === 270) return { w: SRC_H, h: SRC_W };
-  return { w: SRC_W, h: SRC_H };
-}
-
-/**
- * ✅ 关键：自动选“rect 坐标变换模式”，专治你这个“对角线反”
- * - 我们不知道 SDK rect 属于哪套坐标（是否转过/是否轴互换/是否原点翻）
- * - 所以一帧里尝试 8 种模式（4个旋转 * 是否transpose）
- * - 选“落在画面内最多”的那个作为本帧的 rect 修正模式
- */
-function transformRectMode(
-  rect: { x: number; y: number; width: number; height: number },
-  baseW: number,
-  baseH: number,
-  mode: number
-) {
-  'worklet';
-  let x = rect.x, y = rect.y, w = rect.width, h = rect.height;
-
-  // mode: 0..3 = rotate 0/90/180/270
-  // mode: 4..7 = transpose + rotate 0/90/180/270
-  const transpose = mode >= 4;
-  const rot = mode % 4;
-
-  if (transpose) {
-    // 对角线反：swap x<->y & w<->h
-    const tx = y; const ty = x;
-    const tw = h; const th = w;
-    x = tx; y = ty; w = tw; h = th;
-
-    // transpose 后，坐标基准也相当于交换
-    const tmp = baseW; baseW = baseH; baseH = tmp;
-  }
-
-  // 再做旋转（把“某坐标系”转到 upright）
-  // 注意：这里用 baseW/baseH 做旋转公式
-  if (rot === 0) {
-    return { x, y, width: w, height: h, outW: baseW, outH: baseH };
-  }
-
-  if (rot === 1) {
-    // rotate 90 CW
-    // (x, y) -> (baseH - (y+h), x)
-    return {
-      x: baseH - (y + h),
-      y: x,
-      width: h,
-      height: w,
-      outW: baseH,
-      outH: baseW,
-    };
-  }
-
-  if (rot === 2) {
-    // rotate 180
-    return {
-      x: baseW - (x + w),
-      y: baseH - (y + h),
-      width: w,
-      height: h,
-      outW: baseW,
-      outH: baseH,
-    };
-  }
-
-  // rot === 3 : rotate 270 CW (or 90 CCW)
-  return {
-    x: y,
-    y: baseW - (x + w),
-    width: h,
-    height: w,
-    outW: baseH,
-    outH: baseW,
-  };
-}
-
-function scoreRectInBounds(
-  r: { x: number; y: number; width: number; height: number },
-  W: number,
-  H: number
-) {
-  'worklet';
-  const cx = r.x + r.width * 0.5;
-  const cy = r.y + r.height * 0.5;
-  let s = 0;
-
-  if (r.width > 4 && r.height > 4) s += 1;
-  if (r.width < W * 1.2 && r.height < H * 1.2) s += 1;
-  if (cx >= 0 && cx <= W && cy >= 0 && cy <= H) s += 3;
-
-  // 轻微惩罚离谱值
-  if (r.x < -W || r.y < -H || r.x > 2 * W || r.y > 2 * H) s -= 2;
-
-  return s;
+  if (d === 90 || d === 270) return { w: SRC_H, h: SRC_W }; // 480x640
+  return { w: SRC_W, h: SRC_H }; // 640x480
 }
 
 function normalizeRectToPx(rect: any, W: number, H: number) {
@@ -247,32 +134,189 @@ function normalizeRectToPx(rect: any, W: number, H: number) {
   if (w <= 1.5 && h <= 1.5) {
     x *= W; y *= H; w *= W; h *= H;
   }
+  return { x, y, width: w, height: h };
+}
+
+// ===================== Smart transform (fix diagonal / wrong rotation) =====================
+function scoreRect(
+  r: { x: number; y: number; width: number; height: number },
+  W: number,
+  H: number
+) {
+  'worklet';
+  const cx = r.x + r.width * 0.5;
+  const cy = r.y + r.height * 0.5;
+
+  let s = 0;
+  if (r.width > 5 && r.height > 5) s += 1;
+  if (r.width < W * 1.2 && r.height < H * 1.2) s += 1;
+  if (cx >= 0 && cx <= W && cy >= 0 && cy <= H) s += 3;
+
+  if (r.x < -W || r.y < -H || r.x > 2 * W || r.y > 2 * H) s -= 2;
+
+  // 轻微中心约束，避免 90°时 CW/CCW 都“在范围内”但选错
+  const dx = Math.abs(cx - W * 0.5) / W;
+  const dy = Math.abs(cy - H * 0.5) / H;
+  s -= (dx + dy) * 1.2;
+
+  return s;
+}
+
+function transposeRect(r: { x: number; y: number; width: number; height: number }) {
+  'worklet';
+  return { x: r.y, y: r.x, width: r.height, height: r.width };
+}
+
+function rot90CW(r: { x: number; y: number; width: number; height: number }, W: number, H: number) {
+  'worklet';
+  return { x: H - (r.y + r.height), y: r.x, width: r.height, height: r.width, outW: H, outH: W };
+}
+
+function rot90CCW(r: { x: number; y: number; width: number; height: number }, W: number, H: number) {
+  'worklet';
+  return { x: r.y, y: W - (r.x + r.width), width: r.height, height: r.width, outW: H, outH: W };
+}
+
+function rot180(r: { x: number; y: number; width: number; height: number }, W: number, H: number) {
+  'worklet';
+  return { x: W - (r.x + r.width), y: H - (r.y + r.height), width: r.width, height: r.height, outW: W, outH: H };
+}
+
+/**
+ * ✅ base(640×480) rect → upright rect
+ * 自动在 4 种组合里挑最合理的（修复：对角线/方向反）
+ * mode: 0..3
+ *  - bit0: transpose
+ *  - bit1: useCCW (否则CW)
+ */
+function baseRectToUprightSmart(
+  rawBase: { x: number; y: number; width: number; height: number },
+  rotDeg: number,
+  uprightW: number,
+  uprightH: number
+) {
+  'worklet';
+  const d = ((rotDeg % 360) + 360) % 360;
+
+  if (d === 0) return { ...rawBase, outW: SRC_W, outH: SRC_H, mode: 0, anchor: 0 };
+  if (d === 180) return { ...rot180(rawBase, SRC_W, SRC_H), mode: 0, anchor: 0 };
+
+  const want270 = (d === 270);
+
+  let bestMode = 0;
+  let bestScore = -1e9;
+  let best: any = null;
+
+  for (let mode = 0; mode < 4; mode++) {
+    const doTranspose = (mode & 1) === 1;
+    const useCCW = (mode & 2) === 2;
+
+    const ccw = want270 ? !useCCW : useCCW;
+
+    let r = doTranspose ? transposeRect(rawBase) : rawBase;
+
+    const W = doTranspose ? SRC_H : SRC_W; // 480 or 640
+    const H = doTranspose ? SRC_W : SRC_H; // 640 or 480
+
+    const tr = ccw ? rot90CCW(r, W, H) : rot90CW(r, W, H);
+
+    let s = scoreRect(tr, tr.outW, tr.outH);
+    if (tr.outW === uprightW && tr.outH === uprightH) s += 2;
+
+    if (s > bestScore) {
+      bestScore = s;
+      bestMode = mode;
+      best = tr;
+    }
+  }
+
+  return { ...best, mode: bestMode, anchor: 0 };
+}
+
+// ===================== 自动按 VisionCamera 实际预览比例映射（关键修复） =====================
+// format.videoWidth/videoHeight 是“传感器原始方向”尺寸；rotDeg 后 upright 可能互换
+function getUprightVideoSize(rotDeg: number, format: any) {
+  const fw = Number(format?.videoWidth ?? 0);
+  const fh = Number(format?.videoHeight ?? 0);
+  const d = ((rotDeg % 360) + 360) % 360;
+  if (!fw || !fh) return { w: 0, h: 0 };
+  if (d === 90 || d === 270) return { w: fh, h: fw };
+  return { w: fw, h: fh };
+}
+
+/**
+ * ✅ 核心：rect(coordW/coordH) -> video(uprightW/uprightH) -> view(contain)
+ * Maps a rectangle from the processing coordinate system to the view's coordinate system.
+ */
+function mapRectToViewContainByVideo(
+  b: { x: number; y: number; width: number; height: number },
+  coordW: number,
+  coordH: number,
+  videoW: number,
+  videoH: number,
+  viewW: number,
+  viewH: number,
+  rotDeg: number,
+  isFrontCamera: boolean,
+  isAndroid: boolean // 新增参数
+) {
+  'worklet';
+
+  // 1. Map from processing coordinates `(coordW, coordH)` to video coordinates `(videoW, videoH)`.
+  const videoX = (b.x / coordW) * videoW;
+  let videoY = (b.y / coordH) * videoH;
+  const videoW_ = (b.width / coordW) * videoW;
+  const videoH_ = (b.height / coordH) * videoH;
+
+  // 修复：在 90/270 度旋转时，Y 轴方向反了（用户反馈：人脸下移，框上移）
+  // 这种情况通常发生在 Android 前置摄像头上
+  const isRot90 = [90, 270].includes(((rotDeg % 360) + 360) % 360);
+  if (isAndroid && isRot90 && isFrontCamera) {
+    // 翻转 Y 轴: newY = H - (y + h)
+    videoY = videoH - (videoY + videoH_);
+  }
+
+  // 2. Map from video coordinates to view coordinates, respecting "contain" resizeMode.
+  const scale = Math.min(viewW / videoW, viewH / videoH);
+  const offsetX = (viewW - videoW * scale) / 2;
+  const offsetY = (viewH - videoH * scale) / 2;
+
+  const viewX = videoX * scale + offsetX;
+  const viewY = videoY * scale + offsetY;
+  const viewW_ = videoW_ * scale;
+  const viewH_ = videoH_ * scale;
 
   return {
-    x, y,
-    width: w,
-    height: h,
+    x: clamp(viewX, -viewW, viewW * 2),
+    y: clamp(viewY, -viewH, viewH * 2),
+    width: clamp(viewW_, 0, viewW * 2),
+    height: clamp(viewH_, 0, viewH * 2),
   };
 }
 
-// format 选择（可留可删）
+// ===================== Format helper（不固定比例） =====================
 function pickBestFormat(device: any) {
   if (!device?.formats?.length) return undefined;
-  const targetArea = SRC_W * SRC_H;
-
+  // 不固定比例：优先较高 fps + 适中分辨率
   let best = device.formats[0];
-  let bestScore = Number.POSITIVE_INFINITY;
+  let bestScore = -1e18;
 
   for (const f of device.formats) {
-    const area = (f.videoWidth ?? 0) * (f.videoHeight ?? 0);
-    const areaDiff = Math.abs(area - targetArea);
-    const maxFps = f.maxFps ?? 30;
-    const score = areaDiff - maxFps * 1000;
-    if (score < bestScore) {
+    const w = Number(f.videoWidth ?? 0);
+    const h = Number(f.videoHeight ?? 0);
+    const fps = Number(f.maxFps ?? 30);
+    const area = w * h;
+
+    // 过大分辨率在安卓上会吃性能，轻微惩罚
+    const areaPenalty = area / (1920 * 1080);
+
+    const score = fps * 1000 - areaPenalty * 200;
+    if (score > bestScore) {
       bestScore = score;
       best = f;
     }
   }
+
   return best;
 }
 
@@ -296,13 +340,18 @@ export default function RealTimeRecognitionScreen() {
   const [debug, setDebug] = useState({
     faceCount: 0,
     rotDeg: 0,
-    chosenMode: 0,
+    mode: 0,
+    anchor: 0,
     base: `${SRC_W}x${SRC_H}`,
-    upright: `0x0`,
+    coord: `0x0`,
+    video: `0x0`,
   });
 
-  // 🔧 新增：防止重复初始化 Session
+  // Session 单例
   const sessionRef = useRef<any>(null);
+
+  // JS 平滑
+  const smoothRef = useRef(new Map<number, FaceBoxUI>());
 
   // 权限
   useFocusEffect(
@@ -321,7 +370,6 @@ export default function RealTimeRecognitionScreen() {
       };
       requestPermission();
 
-      // 🔧 组件失焦时清理状态
       return () => {
         setIsCameraActive(false);
         setBoxes([]);
@@ -360,7 +408,6 @@ export default function RealTimeRecognitionScreen() {
         setHubFaceCount(hubCount);
         log(`Reloaded faces: ${cnt}, hubCount: ${hubCount}`);
       } catch (e) {
-        console.warn('Reload faces error:', e);
         log('Reload faces error:', e);
       }
     };
@@ -368,34 +415,27 @@ export default function RealTimeRecognitionScreen() {
     loadRegisteredFaces();
   }, [isFocused, hasPermission]);
 
-  // 🔧 修复：Session 初始化逻辑（防止重复创建）
   const boxedSession = useMemo(() => {
     if (sessionRef.current) return sessionRef.current;
 
-    try {
-      const s = InspireFace.createSession(
-        { enableRecognition: true, enableFaceQuality: true },
-        DetectMode.ALWAYS_DETECT,
-        5,
-        -1,
-        15 // 🔧 限制跟踪帧率，降低性能消耗
-      );
-      s.setTrackPreviewSize(320);
-      s.setFaceDetectThreshold(0.6); // 🔧 提高检测阈值，减少误检
-      s.setTrackModeSmoothRatio(0.7);
-      s.setTrackModeDetectInterval(10);
-      s.setFilterMinimumFacePixelSize(50);
+    const s = InspireFace.createSession(
+      { enableRecognition: true, enableFaceQuality: true },
+      DetectMode.ALWAYS_DETECT,
+      5,
+      -1,
+      15
+    );
+    s.setTrackPreviewSize(320);
+    s.setFaceDetectThreshold(0.6);
+    s.setTrackModeSmoothRatio(0.7);
+    s.setTrackModeDetectInterval(10);
+    s.setFilterMinimumFacePixelSize(50);
 
-      const boxed = NitroModules.box(s);
-      sessionRef.current = boxed;
-      return boxed;
-    } catch (e) {
-      log('创建 Session 失败:', e);
-      throw e;
-    }
+    const boxed = NitroModules.box(s);
+    sessionRef.current = boxed;
+    return boxed;
   }, []);
 
-  // 🔧 修复：组件卸载时释放 Session
   useEffect(() => {
     return () => {
       if (sessionRef.current) {
@@ -413,38 +453,61 @@ export default function RealTimeRecognitionScreen() {
 
   const format = useMemo(() => pickBestFormat(device), [device]);
 
-  // JS 平滑
-  const smoothRef = useRef(new Map<number, FaceBoxUI>());
-
-  // 🔧 优化：防抖逻辑 + 类型安全
   const reportFacesToJS = useMemo(() => {
     let lastReportTime = 0;
+
     return Worklets.createRunOnJS(
       (payload: {
         faceCount: number;
         rotDeg: number;
-        chosenMode: number;
-        uprightW: number;
-        uprightH: number;
+        mode: number;
+        anchor: number;
+        coordW: number;
+        coordH: number;
         faces: FaceBoxBuf[];
+        isFrontCamera: boolean;
       }) => {
-        // 防抖：66ms 内只更新一次（约15fps）
         const now = Date.now();
         if (now - lastReportTime < 66) return;
         lastReportTime = now;
 
+        const vw = canvasSize.value?.width || PREVIEW_W;
+        const vh = canvasSize.value?.height || PREVIEW_H;
+
+        const { w: videoW0, h: videoH0 } = getUprightVideoSize(payload.rotDeg, format);
+        const videoW = videoW0 || payload.coordW;
+        const videoH = videoH0 || payload.coordH;
+
         setDebug({
           faceCount: payload.faceCount,
           rotDeg: payload.rotDeg,
-          chosenMode: payload.chosenMode,
+          mode: payload.mode,
+          anchor: payload.anchor,
           base: `${SRC_W}x${SRC_H}`,
-          upright: `${payload.uprightW}x${payload.uprightH}`,
+          coord: `${payload.coordW}x${payload.coordH}`,
+          video: `${videoW}x${videoH}`,
         });
 
         const alpha = 0.35;
+        const isAndroid = Platform.OS === 'android';
 
         const next: FaceBoxUI[] = payload.faces.map((b) => {
-          const mapped = mapRectToViewContain(b, payload.uprightW, payload.uprightH, PREVIEW_W, PREVIEW_H);
+          // ✅ 核心修复：传入旋转角度做精准映射
+          const mapped = mapRectToViewContainByVideo(
+            b,
+            payload.coordW,
+            payload.coordH,
+            videoW,
+            videoH,
+            vw,
+            vh,
+            payload.rotDeg,
+            payload.isFrontCamera,
+            isAndroid
+          );
+
+          // 修正：整体上移，解决框偏下（眉毛到颈部）的问题
+          mapped.y -= mapped.height * FACE_BOX_Y_OFFSET_RATIO;
 
           const id = b.trackId ?? 0;
           const prev = smoothRef.current.get(id);
@@ -470,7 +533,6 @@ export default function RealTimeRecognitionScreen() {
           return ui;
         });
 
-        // 清理过期的 trackId
         const aliveIds = new Set(next.map((n) => n.id));
         smoothRef.current.forEach((_, key) => {
           if (!aliveIds.has(key)) smoothRef.current.delete(key);
@@ -479,9 +541,8 @@ export default function RealTimeRecognitionScreen() {
         setBoxes(next);
       }
     );
-  }, []);
+  }, [canvasSize, format]);
 
-  // 🔧 核心修复：FrameProcessor 性能 + 错误处理 + 类型安全
   const frameProcessor = useFrameProcessor(
     (frame: Frame) => {
       'worklet';
@@ -491,15 +552,15 @@ export default function RealTimeRecognitionScreen() {
       g.__dlx_busy = true;
 
       try {
-        // 🔧 降低处理帧率到15fps，平衡性能和体验
         runAtTargetFps(15, () => {
           'worklet';
 
           let bitmap: any = null;
           let imageStream: any = null;
+          const isFront = cameraType === 'front';
 
           try {
-            // ✅ 只 resize，不旋转、不镜像（避免坐标系搞乱）
+            // ✅ resize 只做缩放，不旋转不镜像（保证 SDK 识别稳定）
             const resized = resize(frame, {
               scale: { width: SRC_W, height: SRC_H },
               rotation: '0deg',
@@ -508,69 +569,35 @@ export default function RealTimeRecognitionScreen() {
               mirror: false,
             });
 
-            if (!resized || !resized.buffer) {
-              console.error('[Worklet] Resize 插件返回空数据');
-              reportFacesToJS({
-                faceCount: 0,
-                rotDeg: 0,
-                chosenMode: 0,
-                uprightW: SRC_W,
-                uprightH: SRC_H,
-                faces: [],
-              });
+            if (!resized?.buffer) {
+              reportFacesToJS({ faceCount: 0, rotDeg: 0, mode: 0, anchor: 0, coordW: SRC_W, coordH: SRC_H, faces: [], isFrontCamera: isFront });
               return;
             }
 
-            // 用 frame 的真实旋转告诉 InspireFace
             const rotDeg = getFrameRotationDegrees(frame);
             const camRot = toCameraRotation(rotDeg);
 
-            // upright 尺寸（用于最终画框坐标系）
             const upright = uprightSizeForRotation(rotDeg);
             const uprightW = upright.w;
             const uprightH = upright.h;
 
             const unboxed = BoxedInspireFace.unbox();
             if (!unboxed) {
-              console.error('[Worklet] 无法获取 InspireFace 实例');
-              reportFacesToJS({
-                faceCount: 0,
-                rotDeg,
-                chosenMode: 0,
-                uprightW,
-                uprightH,
-                faces: [],
-              });
+              reportFacesToJS({ faceCount: 0, rotDeg, mode: 0, anchor: 0, coordW: uprightW, coordH: uprightH, faces: [], isFrontCamera: isFront });
               return;
             }
 
-            // 🔧 修复：使用动态计算的尺寸创建 bitmap
-            bitmap = unboxed.createImageBitmapFromBuffer(
-              resized.buffer as ArrayBuffer,
-              SRC_W,
-              SRC_H,
-              3 // BGR 通道数
-            );
-
+            bitmap = unboxed.createImageBitmapFromBuffer(resized.buffer as ArrayBuffer, SRC_W, SRC_H, 3);
             imageStream = unboxed.createImageStreamFromBitmap(bitmap, camRot);
 
             const session = boxedSession.unbox();
             if (!session) {
-              console.error('[Worklet] Session 未初始化');
-              reportFacesToJS({
-                faceCount: 0,
-                rotDeg,
-                chosenMode: 0,
-                uprightW,
-                uprightH,
-                faces: [],
-              });
+              reportFacesToJS({ faceCount: 0, rotDeg, mode: 0, anchor: 0, coordW: uprightW, coordH: uprightH, faces: [], isFrontCamera: isFront });
               return;
             }
 
             const facesAny: any = session.executeFaceTrack(imageStream);
 
-            // 🔧 兼容不同的返回格式
             const faceCount = (() => {
               if (!facesAny) return 0;
               if (typeof facesAny.length === 'number') return facesAny.length;
@@ -579,51 +606,20 @@ export default function RealTimeRecognitionScreen() {
             })();
 
             if (faceCount <= 0) {
-              reportFacesToJS({
-                faceCount: 0,
-                rotDeg,
-                chosenMode: 0,
-                uprightW,
-                uprightH,
-                faces: [],
-              });
+              reportFacesToJS({ faceCount: 0, rotDeg, mode: 0, anchor: 0, coordW: uprightW, coordH: uprightH, faces: [], isFrontCamera: isFront });
               return;
             }
 
-            // 先收集 raw rect（最多取前3个用来选模式）
-            const rawRects: { x: number; y: number; width: number; height: number }[] = [];
+            // ✅ 画框坐标系统一使用 uprightW/uprightH（后续 JS 会自动映射到 video/preview）
+            const coordW = uprightW;
+            const coordH = uprightH;
 
-            for (let i = 0; i < faceCount && i < 3; i++) {
-              const f = facesAny[i] ?? {
-                token: facesAny.tokens?.[i],
-                rect: facesAny.rects?.[i],
-                trackId: facesAny.trackIds?.[i] ?? facesAny.ids?.[i],
-              };
+            // ✅ 镜像只发生一次：看顶部开关
+            const mirrorUI = isFront && MIRROR_ON_OVERLAY;
 
-              if (!f?.rect) continue;
-              rawRects.push(normalizeRectToPx(f.rect, SRC_W, SRC_H));
-            }
+            let chosenMode = 0;
+            let chosenAnchor = 0;
 
-            // ✅ 选最匹配的模式（8种）
-            let bestMode = 0;
-            let bestScore = -999999;
-
-            for (let mode = 0; mode < 8; mode++) {
-              let s = 0;
-              for (let i = 0; i < rawRects.length; i++) {
-                const tr = transformRectMode(rawRects[i], SRC_W, SRC_H, mode);
-                // tr.outW/outH 是该模式下的坐标空间尺寸
-                // 我们最终要的是 uprightW/uprightH，所以只给“尺寸一致”的模式更高分
-                const sizeMatch = (tr.outW === uprightW && tr.outH === uprightH) ? 2 : 0;
-                s += scoreRectInBounds(tr, tr.outW, tr.outH) + sizeMatch;
-              }
-              if (s > bestScore) {
-                bestScore = s;
-                bestMode = mode;
-              }
-            }
-
-            // 生成最终 boxes（在 upright 坐标系）
             const out: FaceBoxBuf[] = [];
 
             for (let i = 0; i < faceCount; i++) {
@@ -632,31 +628,37 @@ export default function RealTimeRecognitionScreen() {
                 rect: facesAny.rects?.[i],
                 trackId: facesAny.trackIds?.[i] ?? facesAny.ids?.[i],
               };
-
               if (!f?.rect || !f?.token) continue;
 
-              const raw = normalizeRectToPx(f.rect, SRC_W, SRC_H);
-              const tr = transformRectMode(raw, SRC_W, SRC_H, bestMode);
+              const rawBase = normalizeRectToPx(f.rect, SRC_W, SRC_H);
 
-              // ✅ 前摄：只在“画框坐标系”做镜像（与 <Camera isMirrored> 保持一致）
-              const mirrorUI = cameraType === 'front';
-              let fx = tr.x;
-              if (mirrorUI) fx = tr.outW - (tr.x + tr.width);
+              // ✅ 智能把 base rect 转到 upright rect（修复对角线/方向反）
+              const smart = baseRectToUprightSmart(rawBase, rotDeg, uprightW, uprightH);
+              if (i === 0) {
+                chosenMode = smart.mode;
+                chosenAnchor = smart.anchor ?? 0;
+              }
 
-              // clamp 防止越界
-              const bx = clamp(fx, -tr.outW, tr.outW * 2);
-              const by = clamp(tr.y, -tr.outH, tr.outH * 2);
-              const bw = clamp(tr.width, 0, tr.outW * 2);
-              const bh = clamp(tr.height, 0, tr.outH * 2);
+              let rU = smart; // x/y/width/height/outW/outH
 
-              // 🔧 增加错误处理：防止特征提取失败
-              let feature: any = null;
+              if (SDK_Y_ORIGIN_BOTTOM) {
+                rU = { ...rU, y: rU.outH - (rU.y + rU.height) };
+              }
+
+              if (mirrorUI) {
+                rU = { ...rU, x: rU.outW - (rU.x + rU.width) };
+              }
+
+              const bx = clamp(rU.x, -rU.outW, rU.outW * 2);
+              const by = clamp(rU.y, -rU.outH, rU.outH * 2);
+              const bw = clamp(rU.width, 0, rU.outW * 2);
+              const bh = clamp(rU.height, 0, rU.outH * 2);
+
               let searched: any = null;
               try {
-                feature = session.extractFaceFeature(imageStream, f.token);
+                const feature = session.extractFaceFeature(imageStream, f.token);
                 searched = unboxed.featureHubFaceSearch(feature);
-              } catch (e) {
-                console.error(`[Worklet] 提取特征失败: ${e?.message}`);
+              } catch {
                 searched = { name: '识别失败', confidence: 0 };
               }
 
@@ -679,25 +681,18 @@ export default function RealTimeRecognitionScreen() {
             reportFacesToJS({
               faceCount,
               rotDeg,
-              chosenMode: bestMode,
-              uprightW,
-              uprightH,
+              mode: chosenMode,
+              anchor: chosenAnchor,
+              coordW,
+              coordH,
               faces: out,
+              isFrontCamera: isFront,
             });
-          } catch (e: any) {
-            console.error('[Worklet] FaceTrack 处理失败:', e?.message ?? e);
-            reportFacesToJS({
-              faceCount: 0,
-              rotDeg: 0,
-              chosenMode: 0,
-              uprightW: SRC_W,
-              uprightH: SRC_H,
-              faces: [],
-            });
+          } catch {
+            reportFacesToJS({ faceCount: 0, rotDeg: 0, mode: 0, anchor: 0, coordW: SRC_W, coordH: SRC_H, faces: [], isFrontCamera: isFront });
           } finally {
-            // 🔧 确保资源释放
-            try { if (imageStream) imageStream.dispose(); } catch (e) {}
-            try { if (bitmap) bitmap.dispose(); } catch (e) {}
+            try { if (imageStream) imageStream.dispose(); } catch {}
+            try { if (bitmap) bitmap.dispose(); } catch {}
           }
         });
       } finally {
@@ -707,7 +702,6 @@ export default function RealTimeRecognitionScreen() {
     [resize, boxedSession, reportFacesToJS, cameraType]
   );
 
-  // 🔧 优化：切换摄像头时重置状态
   const toggleCamera = useCallback(() => {
     setCameraType((p) => (p === 'front' ? 'back' : 'front'));
     setBoxes([]);
@@ -715,9 +709,7 @@ export default function RealTimeRecognitionScreen() {
   }, []);
 
   const startRecognition = useCallback(() => {
-    if (cameraInitialized) {
-      setIsCameraActive(true);
-    }
+    if (cameraInitialized) setIsCameraActive(true);
   }, [cameraInitialized]);
 
   const stopRecognition = useCallback(() => {
@@ -763,10 +755,11 @@ export default function RealTimeRecognitionScreen() {
         isActive={isFocused && cameraInitialized && isCameraActive}
         format={format}
         frameProcessor={frameProcessor}
-        frameProcessorFps={15} // 🔧 匹配处理帧率
+        frameProcessorFps={15}
         resizeMode="contain"
         zoom={0}
-        isMirrored={cameraType === 'front'}
+        // ✅ 镜像只在预览或画框二选一
+        isMirrored={cameraType === 'front' && MIRROR_ON_PREVIEW}
         onInitialized={() => setCameraInitialized(true)}
         onError={(error) => {
           log('Camera 错误:', error);
@@ -774,10 +767,12 @@ export default function RealTimeRecognitionScreen() {
         }}
       />
 
-      {/* 🔧 修复：Canvas 尺寸同步 + 防止空渲染 */}
-      <Canvas style={StyleSheet.absoluteFill} onSize={(size) => {
-        canvasSize.value = size;
-      }}>
+      <Canvas
+        style={StyleSheet.absoluteFill}
+        onSize={(size) => {
+          canvasSize.value = size;
+        }}
+      >
         {boxes.map((b) => {
           let label = b.name || `ID:${b.id}`;
           if (b.isMatched && b.confidence) label += ` (${(b.confidence * 100).toFixed(1)}%)`;
@@ -818,14 +813,20 @@ export default function RealTimeRecognitionScreen() {
           );
         })}
 
-        {/* 调试信息 */}
         {font && (
           <>
-            <Rect x={10} y={40} width={390} height={30} color={BG_BLACK50} />
+            <Rect x={10} y={40} width={760} height={78} color={BG_BLACK50} />
             <SkiaText
               x={20}
               y={65}
-              text={`hub:${hubFaceCount} faces:${debug.faceCount} rot:${debug.rotDeg} mode:${debug.chosenMode} base:${debug.base} up:${debug.upright}`}
+              text={`hub:${hubFaceCount} faces:${debug.faceCount} rot:${debug.rotDeg} mode:${debug.mode} anchor:${debug.anchor}`}
+              font={font}
+              color={COLOR_WHITE}
+            />
+            <SkiaText
+              x={20}
+              y={88}
+              text={`base:${debug.base} coord:${debug.coord} video:${debug.video}`}
               font={font}
               color={COLOR_WHITE}
             />
