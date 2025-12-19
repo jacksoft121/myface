@@ -202,9 +202,42 @@ export async function queryNameById(id: number): Promise<string | null> {
   const res = await run(`SELECT name
                          FROM ${TABLE}
                          WHERE id = ? LIMIT 1`, [id]);
-  const rows = res?.rows ?? [];
-  if (!rows.length) return null;
+  const rows = res?.rows;
+  if (!rows || rows.length === 0) return null;
   return rows[0]?.name ?? null;
+}
+
+/**
+ * 根据 faceId (主键 id) 查询用户信息
+ */
+export async function queryUserByFaceId(faceId: number): Promise<User | null> {
+  const res = await run(
+    `SELECT id,
+            name,
+            dlx_user_id,
+            dlx_user_name,
+            dlx_user_role,
+            dlx_user_org_id,
+            dlx_user_org_name,
+            dlx_user_oss_url
+     FROM ${TABLE}
+     WHERE id = ? LIMIT 1`,
+    [faceId]
+  );
+  const rows = res?.rows;
+  if (!rows || rows.length === 0) return null;
+
+  const row = rows[0];
+  return {
+    id: Number(row.id),
+    name: String(row.name),
+    dlx_user_id: row.dlx_user_id ? String(row.dlx_user_id) : undefined,
+    dlx_user_name: row.dlx_user_name ? String(row.dlx_user_name) : undefined,
+    dlx_user_role: row.dlx_user_role ? String(row.dlx_user_role) : undefined,
+    dlx_user_org_id: row.dlx_user_org_id ? String(row.dlx_user_org_id) : undefined,
+    dlx_user_org_name: row.dlx_user_org_name ? String(row.dlx_user_org_name) : undefined,
+    dlx_user_oss_url: row.dlx_user_oss_url ? String(row.dlx_user_oss_url) : undefined
+  };
 }
 
 /**
@@ -225,7 +258,8 @@ export async function queryUsersByName(name: string): Promise<User[]> {
      ORDER BY id ASC`,
     [name]
   );
-  const rows = res?.rows ?? [];
+  const rows = res?.rows;
+  if (!Array.isArray(rows)) return [];
   return rows.map((r: any) => ({
     id: Number(r.id),
     name: String(r.name),
@@ -255,8 +289,8 @@ export async function queryUserByDlxUserId(dlxUserId: string): Promise<User | nu
      WHERE dlx_user_id = ? LIMIT 1`,
     [dlxUserId]
   );
-  const rows = res?.rows ?? [];
-  if (!rows.length) return null;
+  const rows = res?.rows;
+  if (!rows || rows.length === 0) return null;
 
   const row = rows[0];
   return {
@@ -289,7 +323,8 @@ export async function queryUsersByDlxUserRole(dlxUserRole: string): Promise<User
      ORDER BY id ASC`,
     [dlxUserRole]
   );
-  const rows = res?.rows ?? [];
+  const rows = res?.rows;
+  if (!Array.isArray(rows)) return [];
   return rows.map((r: any) => ({
     id: Number(r.id),
     name: String(r.name),
@@ -320,8 +355,8 @@ export async function queryUserByDlxInfo(dlxUserId: string, dlxUserRole: string)
        AND dlx_user_role = ? LIMIT 1`,
     [dlxUserId, dlxUserRole]
   );
-  const rows = res?.rows ?? [];
-  if (!rows.length) return null;
+  const rows = res?.rows;
+  if (!rows || rows.length === 0) return null;
 
   const row = rows[0];
   return {
@@ -396,7 +431,8 @@ export async function getAllUsers(): Promise<User[]> {
      FROM ${TABLE}
      ORDER BY id ASC`
   );
-  const rows = res?.rows ?? [];
+  const rows = res?.rows;
+  if (!Array.isArray(rows)) return [];
   return rows.map((r: any) => ({
     id: Number(r.id),
     name: String(r.name),
@@ -429,7 +465,8 @@ export async function queryUsersByOrgId(orgId: string): Promise<User[]> {
      WHERE dlx_user_org_id = ?`,
     [orgId]
   );
-  const rows = res?.rows ?? [];
+  const rows = res?.rows;
+  if (!Array.isArray(rows)) return [];
   return rows.map((r: any) => ({
     id: Number(r.id),
     name: String(r.name),

@@ -4,7 +4,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import LoginScreen from './LoginScreen';
 import SettingFace from './SettingFace';
 import RegisteredFacesScreen from './RegisterFaces';
-
+import Apptest from './Apptest';
 import RealTimeRecognitionScreen from './RealTimeRecognitionScreen';
 import { initFaceDB } from "./comm/FaceDB";
 import {InspireFace, PrimaryKeyMode} from "react-native-nitro-inspire-face";
@@ -55,7 +55,11 @@ function App(): React.JSX.Element {
           component={RegisteredFacesScreen}
           options={{ title: '已注册人脸' }}
         />
-
+        <Stack.Screen
+          name="Apptest"
+          component={Apptest}
+          options={{ title: '测试人脸识别' }}
+        />
       </Stack.Navigator>
     </NavigationContainer>
   );
