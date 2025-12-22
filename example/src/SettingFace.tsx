@@ -17,7 +17,6 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
-import RNFS from 'react-native-fs';
 import Clipboard from '@react-native-clipboard/clipboard';
 import { apiFind } from './api';
 import {
@@ -37,37 +36,9 @@ import {
   deleteUsersByOrgId,
   updateDlxUserByFaceId,
 } from './comm/FaceDB';
+import { FaceRegistrationService } from './comm/FaceRegistrationService';
 
-// #region Type Definitions
-type RootStackParamList = {
-  Login: undefined;
-  ArcSoftInfo: undefined;
-  RegisteredFaces: undefined;
-  FaceShow: {
-    isFront: boolean;
-    isLiveness: boolean;
-    faceScore: number;
-    faceQuality: number;
-    facePreviewSize: string;
-  };
-  SkiaDemo: undefined;
-};
-
-type ArcSoftInfoScreenNavigationProp = NativeStackNavigationProp<
-  RootStackParamList,
-  'ArcSoftInfo'
->;
-
-type LogEntry = {
-  text: string;
-  type: 'log' | 'error' | 'success';
-};
-
-type Campus = {
-  ID: number;
-  VCNAME: string;
-  // ... 其他 Campus 属性
-};
+const RECOGNITION_PARAMS_KEY = 'recognition_params';
 
 type RecognitionParams = {
   isFront: boolean;
@@ -75,78 +46,87 @@ type RecognitionParams = {
   faceScore: number;
   faceQuality: number;
   facePreviewSize: string;
+  faceConfidenceThreshold: number;
+  cameraMode: 'contain' | 'cover';
+  frameProcessorFPS: number;
 };
-// #endregion
 
-const RECOGNITION_PARAMS_KEY = 'recognition_params';
+type Campus = {
+  ID: number;
+  VCNAME: string;
+};
 
-// Helper to force UI update
-const yieldToMain = () => new Promise(resolve => setTimeout(resolve, 0));
+type OutDataInfo = {
+  data2: Array<{
+    VCNAME: string;
+    ISQD: string;
+    DTQDS: string;
+    DTQDE: string;
+    ISQT: string;
+    DTQTS: string;
+    DTQTE: string;
+  }>;
+};
 
-const SettingFace = () => {
-  const navigation = useNavigation<ArcSoftInfoScreenNavigationProp>();
+type LogEntry = {
+  text: string;
+  type: 'log' | 'error' | 'success';
+};
+
+const SettingFace = ({ route }: any) => {
+  const navigation = useNavigation<NativeStackNavigationProp<any>>();
+  const [idtype, setIdtype] = useState(0);
   const [typetext, setTypetext] = useState('');
-  const [outDataInfo, setOutDataInfo] = useState({ data2: [] });
-
-  // 校区选择相关状态
-  const [campusList, setCampusList] = useState<Campus[]>([]);
+  const [outDataInfo, setOutDataInfo] = useState<OutDataInfo>({ data2: [] });
   const [selectedCampus, setSelectedCampus] = useState<Campus | null>(null);
+  const [campusList, setCampusList] = useState<Campus[]>([]);
   const [isCampusModalVisible, setCampusModalVisible] = useState(false);
-
-  // 进度条相关状态
+  const [isBeginFace, setIsBeginFace] = useState(true);
   const [isProgressVisible, setProgressVisible] = useState(false);
-  const [progressTotal, setProgressTotal] = useState(0);
-  const [progressCurrent, setProgressCurrent] = useState(0);
-  const [progressFailed, setProgressFailed] = useState(0);
-  const [progressMessage, setProgressMessage] = useState('');
-  const [progressLog, setProgressLog] = useState<LogEntry[]>([]);
   const [isProgressComplete, setProgressComplete] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
-  const [elapsedTime, setElapsedTime] = useState(''); // 新增：用于存储总耗时
-  const progressScrollViewRef = useRef<ScrollView>(null);
-
-  // 加载初始识别参数
-  const loadInitialRecognitionParams = useCallback((): RecognitionParams => {
-    const storedParams = recognitionStorage.getString(RECOGNITION_PARAMS_KEY);
-    if (storedParams) {
-      try {
-        const parsedParams = JSON.parse(storedParams);
-        return {
-          isFront: parsedParams.isFront ?? true,
-          isLiveness: parsedParams.isLiveness ?? true,
-          faceScore: parsedParams.faceScore ?? 70,
-          faceQuality: parsedParams.faceQuality ?? 70,
-          facePreviewSize: parsedParams.facePreviewSize ?? '',
-        };
-      } catch (e) {
-        console.error('Failed to parse recognition params from MMKV', e);
-      }
-    }
-    // 默认值
-    return {
-      isFront: true,
-      isLiveness: true,
-      faceScore: 70,
-      faceQuality: 70,
-      facePreviewSize: '',
-    };
-  }, []);
-
-  const initialRecognitionParams = loadInitialRecognitionParams();
-
-  const [isFront, setIsFront] = useState<boolean>(initialRecognitionParams.isFront);
-  const [isLiveness, setIsLiveness] = useState<boolean>(initialRecognitionParams.isLiveness);
-  const [faceScore, setFaceScore] = useState<number>(initialRecognitionParams.faceScore);
-  const [faceQuality, setFaceQuality] = useState<number>(initialRecognitionParams.faceQuality);
-  const [facePreviewSize, setFacePreviewSize] = useState<string>(initialRecognitionParams.facePreviewSize);
-
-  const [msg, setMsg] = useState('1');
-  const [isBeginFace, setIsBeginFace] = useState(false); // 控制“开始刷脸”按钮是否可用
-  const [idtype, setIdtype] = useState(0);
-
+  const [progressMessage, setProgressMessage] = useState('');
+  const [progressLog, setProgressLog] = useState<LogEntry[]>([]);
+  const [progressCurrent, setProgressCurrent] = useState(0);
+  const [progressTotal, setProgressTotal] = useState(0);
+  const [progressFailed, setProgressFailed] = useState(0);
+  const [elapsedTime, setElapsedTime] = useState('');
+  const progressScrollViewRef = useRef<any>(null);
   const sessionRef = useRef<InspireFaceSession | null>(null);
 
-  // 当识别参数变化时，保存到 MMKV
+  // 新增的状态变量
+  const [isFront, setIsFront] = useState(true);
+  const [isLiveness, setIsLiveness] = useState(true);
+  const [faceScore, setFaceScore] = useState(70);
+  const [faceQuality, setFaceQuality] = useState(70);
+  const [facePreviewSize, setFacePreviewSize] = useState('');
+  const [faceConfidenceThreshold, setFaceConfidenceThreshold] = useState(70);
+  const [cameraMode, setCameraMode] = useState<'contain' | 'cover'>('contain');
+  const [frameProcessorFPS, setFrameProcessorFPS] = useState(30);
+
+  const loadInitialRecognitionParams = useCallback(async () => {
+    const cachedParams = recognitionStorage.getString(RECOGNITION_PARAMS_KEY);
+    if (cachedParams) {
+      try {
+        const params: RecognitionParams = JSON.parse(cachedParams);
+        setIsFront(params.isFront);
+        setIsLiveness(params.isLiveness);
+        setFaceScore(params.faceScore);
+        setFaceQuality(params.faceQuality);
+        setFacePreviewSize(params.facePreviewSize);
+        setFaceConfidenceThreshold(params.faceConfidenceThreshold);
+        setCameraMode(params.cameraMode);
+        setFrameProcessorFPS(params.frameProcessorFPS);
+      } catch (e) {
+        console.error('解析缓存参数失败:', e);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    loadInitialRecognitionParams();
+  }, [loadInitialRecognitionParams]);
+
   useEffect(() => {
     const paramsToSave: RecognitionParams = {
       isFront,
@@ -154,62 +134,21 @@ const SettingFace = () => {
       faceScore,
       faceQuality,
       facePreviewSize,
+      faceConfidenceThreshold,
+      cameraMode,
+      frameProcessorFPS,
     };
     recognitionStorage.set(RECOGNITION_PARAMS_KEY, JSON.stringify(paramsToSave));
-  }, [isFront, isLiveness, faceScore, faceQuality, facePreviewSize]);
-
-
-  const extractFeatureFromUrlSession = async (
-    imageUrl: string,
-    session: InspireFaceSession,
-    onProgress: (detail: string, type?: LogEntry['type']) => Promise<void>
-  ): Promise<ArrayBuffer | null> => {
-    if (!imageUrl || !session) {
-      return null;
-    }
-    const tempFilePath = `${
-      RNFS.CachesDirectoryPath
-    }/${new Date().getTime()}.jpg`;
-    let bitmap = null;
-    let imageStream = null;
-    try {
-      await onProgress('正在下载图片...');
-      const download = await RNFS.downloadFile({
-        fromUrl: imageUrl,
-        toFile: tempFilePath,
-      }).promise;
-      if (download.statusCode !== 200) {
-        await onProgress('图片下载失败', 'error');
-        return null;
-      }
-
-      await onProgress('正在创建图像流...');
-      bitmap = InspireFace.createImageBitmapFromFilePath(3, tempFilePath);
-      imageStream = InspireFace.createImageStreamFromBitmap(
-        bitmap,
-        CameraRotation.ROTATION_0
-      );
-      imageStream.setFormat(ImageFormat.BGR);
-
-      await onProgress('正在检测人脸...');
-      const faceInfos = session.executeFaceTrack(imageStream);
-      if (faceInfos.length > 0 && faceInfos[0]) {
-        await onProgress('正在提取特征...');
-        return session.extractFaceFeature(imageStream, faceInfos[0].token);
-      }
-      await onProgress('未检测到人脸', 'error');
-      return null;
-    } catch (error) {
-      const errMsg = (error as Error).message;
-      await onProgress(`处理图片时出错: ${errMsg}`, 'error');
-      console.error(`处理图片时出错 ${imageUrl}:`, error);
-      return null;
-    } finally {
-      imageStream?.dispose();
-      bitmap?.dispose();
-      RNFS.unlink(tempFilePath).catch(() => {});
-    }
-  };
+  }, [
+    isFront,
+    isLiveness,
+    faceScore,
+    faceQuality,
+    facePreviewSize,
+    faceConfidenceThreshold,
+    cameraMode,
+    frameProcessorFPS,
+  ]);
 
   const showToast = useCallback((message: string) => {
     if (Platform.OS === 'android') {
@@ -229,7 +168,11 @@ const SettingFace = () => {
       return;
     }
 
-    setIsBeginFace(false); // 开始加载时禁用“开始刷脸”按钮
+    // 创建 FaceRegistrationService 实例
+    const faceRegistrationService = new FaceRegistrationService(sessionRef.current);
+
+    // 显示进度模态框
+    setIsBeginFace(false); // 开始加载时禁用"开始刷脸"按钮
     setProgressVisible(true);
     setProgressLog([]);
     setProgressComplete(false);
@@ -237,144 +180,35 @@ const SettingFace = () => {
     setProgressFailed(0);
     setElapsedTime('');
 
-    const startTime = performance.now();
-    let wasSuccessful = true;
-
-    const updateProgress = async (detail: string, type: LogEntry['type'] = 'log') => {
-      if (type === 'error') {
-        wasSuccessful = false;
-        setProgressFailed(prev => prev + 1);
-      }
-      console.log(`[进度] ${detail}`);
-      setProgressLog(prevLog => [...prevLog, { text: detail, type }]);
-      await yieldToMain();
-    };
-
-    await updateProgress('正在计算需要处理的照片数量...');
-
     try {
-      // 1. 预计算总数
-      const studentRes = await apiFind('szproctec', {
-        procedure: 'st_con_student_se_imgpath',
-        i_idcampus: selectedCampus.ID,
-        i_dtver: 0,
-      });
-      const teacherRes = await apiFind('szproctec', {
-        procedure: 'st_con_teacher_se_imgpath',
-        i_idcampus: selectedCampus.ID,
-        i_dtver: 0,
-      });
+      // 调用 FaceRegistrationService 的 reloadCampusPhotos 方法
+      // 注意：我们传递一个空函数作为第三个参数，因为我们不需要它
+      await faceRegistrationService.reloadCampusPhotos(
+        selectedCampus,
+        async (detail: string, type: LogEntry['type'] = 'log') => {
+          // 更新进度日志
+          console.log(`[进度] ${detail}`);
+          setProgressLog(prevLog => [...prevLog, { text: detail, type }]);
 
-      const studentsToRegister = studentRes.data?.['#result-set-3'] || [];
-      const teachersToRegister = teacherRes.data?.['#result-set-3'] || [];
-      const total = studentsToRegister.length + teachersToRegister.length;
-
-      setProgressTotal(total);
-      setProgressCurrent(0);
-
-      if (total === 0) {
-        await updateProgress('没有需要载入的照片。');
-        return;
-      }
-
-      // 2. 清空当前校区的旧数据
-      await updateProgress(`正在清空校区 "${selectedCampus.VCNAME}" 的旧数据...`);
-      const usersToDelete = await queryUsersByOrgId(String(selectedCampus.ID));
-      for (const user of usersToDelete) {
-        await InspireFace.featureHubFaceRemove(user.id);
-      }
-      await deleteUsersByOrgId(String(selectedCampus.ID));
-      await updateProgress(`已删除 ${usersToDelete.length} 条旧记录。`);
-
-
-      let currentCount = 0;
-
-      // 3. 注册学生
-      for (const student of studentsToRegister) {
-        currentCount++;
-        setProgressCurrent(currentCount);
-        const userName = `${student.VCNAME}`;
-        await updateProgress(`处理中 (学生): ${userName}`);
-
-        const feature = await extractFeatureFromUrlSession(
-          student.VCIMGPATH,
-          sessionRef.current,
-          updateProgress
-        );
-
-        if (feature) {
-          await updateProgress(`正在为 ${userName} 注册到人脸库...`);
-          const faceId = await InspireFace.featureHubFaceInsert({
-            id: -1,
-            feature,
-          });
-          if (typeof faceId === 'number' && faceId !== -1) {
-            await updateProgress(`注册成功，Face ID: ${faceId}，正在写入数据库...`, 'success');
-            insertName(
-              faceId,
-              student.VCNAME,
-              String(student.ID),
-              student.VCNAME,
-              "2", // role: student
-              String(selectedCampus.ID),
-              selectedCampus.VCNAME,
-              student.VCIMGPATH
-            );
-
-          } else {
-            await updateProgress(`${userName} 的人脸库插入失败`, 'error');
+          // 如果是错误类型，增加失败计数
+          if (type === 'error') {
+            setProgressFailed(prev => prev + 1);
           }
-        }
-      }
 
-      // 4. 注册教师
-      for (const teacher of teachersToRegister) {
-        currentCount++;
-        setProgressCurrent(currentCount);
-        const userName = `${teacher.VCNAME}`;
-        await updateProgress(`处理中 (老师): ${userName}`);
+          // 让出执行权给 UI 线程
+          await yieldToMain();
+        },
+        () => {} // 传递一个空函数作为 onProgressUpdate 参数
+      );
 
-        const feature = await extractFeatureFromUrlSession(
-          teacher.VCIMGPATH,
-          sessionRef.current,
-          updateProgress
-        );
-        if (feature) {
-          await updateProgress(`正在为 ${userName} 注册到人脸库...`);
-          const faceId = await InspireFace.featureHubFaceInsert({
-            id: -1,
-            feature,
-          });
-          if (typeof faceId === 'number' && faceId !== -1) {
-            await updateProgress(`注册成功，Face ID: ${faceId}，正在写入数据库...`, 'success');
-            insertName(
-              faceId,
-              teacher.VCNAME,
-              String(teacher.ID),
-              teacher.VCNAME,
-              "1", // role: teacher
-              String(selectedCampus.ID),
-              selectedCampus.VCNAME,
-              teacher.VCIMGPATH);
-
-          } else {
-            await updateProgress(`${userName} 的人脸库插入失败`, 'error');
-          }
-        }
-      }
-
-      await updateProgress('全部处理完成！', 'success');
+      setIsSuccess(true);
     } catch (error) {
       const errMsg = (error as Error).message;
-      await updateProgress(`发生严重错误: ${errMsg}`, 'error');
       console.error('重新载入照片失败:', errMsg);
+      setIsSuccess(false);
     } finally {
-      const endTime = performance.now();
-      const duration = (endTime - startTime) / 1000;
-      setElapsedTime(`耗时: ${duration.toFixed(2)} 秒`);
-      setIsBeginFace(true); // 加载完成后启用“开始刷脸”按钮
+      setIsBeginFace(true); // 加载完成后启用"开始刷脸"按钮
       setProgressComplete(true);
-      setIsSuccess(wasSuccessful);
     }
   };
 
@@ -405,6 +239,7 @@ const SettingFace = () => {
       const dataKey = '#result-set-1';
       if (res && res.data && res.data[dataKey]) {
         const campuses: Campus[] = res.data[dataKey];
+        setCampusList(campuses);
         const defaultCampus =
           campuses.find((c) => c.ID === currentUser.ID) || campuses[0];
         if (defaultCampus) {
@@ -454,6 +289,9 @@ const SettingFace = () => {
             isFront: config.VCFACENET === '1',
             isLiveness: config.ISFACELAST === '1',
             facePreviewSize: config.QIFACESIZE || '',
+            faceConfidenceThreshold: 70,
+            cameraMode: 'contain',
+            frameProcessorFPS: 30,
           };
           // 更新状态，这将触发上面的 useEffect 自动保存到 MMKV
           setFaceScore(apiParams.faceScore);
@@ -461,7 +299,13 @@ const SettingFace = () => {
           setIsFront(apiParams.isFront);
           setIsLiveness(apiParams.isLiveness);
           setFacePreviewSize(apiParams.facePreviewSize);
+          setFaceConfidenceThreshold(apiParams.faceConfidenceThreshold);
+          setCameraMode(apiParams.cameraMode);
+          setFrameProcessorFPS(apiParams.frameProcessorFPS);
         }
+
+        setIdtype(Number(res.data.ITYPE));
+        setTypetext(res.data.VCTYPE);
       }
     } catch (error) {
       Alert.alert('错误', '获取配置信息失败');
@@ -479,7 +323,7 @@ const SettingFace = () => {
     showToast('日志已复制到剪贴板');
   };
 
-  // 处理“开始刷脸”按钮点击事件
+  // 处理"开始刷脸"按钮点击事件
   const handleStartFaceRecognition = () => {
     // 导航时传递当前状态中的参数
     navigation.navigate('FaceShow', { // 修改为 FaceShow
@@ -488,6 +332,16 @@ const SettingFace = () => {
       faceScore,
       faceQuality,
       facePreviewSize,
+      faceConfidenceThreshold,
+      cameraMode,
+      frameProcessorFPS,
+    });
+  };
+
+  // 模拟让出执行权给 UI 线程的函数
+  const yieldToMain = () => {
+    return new Promise(resolve => {
+      setTimeout(resolve, 0);
     });
   };
 
@@ -575,20 +429,42 @@ const SettingFace = () => {
             />
             <Text style={styles.sliderValue}>{faceQuality}</Text>
           </View>
+
           <View style={styles.row}>
-            <Text style={styles.label}>分辨率:</Text>
-            <TextInput
-              style={styles.input}
-              value={facePreviewSize}
-              onChangeText={setFacePreviewSize}
-              placeholder="例如 640x480"
+            <Text style={styles.label}>置信度阈值:</Text>
+            <Slider
+              style={styles.slider}
+              minimumValue={1}
+              maximumValue={100}
+              step={1}
+              value={faceConfidenceThreshold}
+              onSlidingComplete={setFaceConfidenceThreshold}
             />
+            <Text style={styles.sliderValue}>{faceConfidenceThreshold}</Text>
           </View>
           <View style={styles.row}>
-            <Text style={styles.label}>设备状态:</Text>
-            <Text>{msg === '1' ? '已激活' : '未激活'}</Text>
-            {msg !== '1' && <Button title="前往激活" onPress={() => {}} />}
+            <Text style={styles.label}>相机模式:</Text>
+            <View style={styles.switchContainer}>
+              <Switch
+                value={cameraMode === 'cover'}
+                onValueChange={(value) => setCameraMode(value ? 'cover' : 'contain')}
+              />
+              <Text>{cameraMode === 'cover' ? 'Cover' : 'Contain'}</Text>
+            </View>
           </View>
+          <View style={styles.row}>
+            <Text style={styles.label}>帧率:</Text>
+            <Slider
+              style={styles.slider}
+              minimumValue={0}
+              maximumValue={100}
+              step={1}
+              value={frameProcessorFPS}
+              onSlidingComplete={setFrameProcessorFPS}
+            />
+            <Text style={styles.sliderValue}>{frameProcessorFPS} FPS</Text>
+          </View>
+
           <View style={styles.buttonContainer}>
             <Button title="重新载入照片" onPress={loadInitImg} />
             <View style={{ width: 20 }} />
@@ -815,15 +691,15 @@ const styles = StyleSheet.create({
     borderBottomColor: '#eee',
   },
   modalItemText: {
-    fontSize: 18,
+    fontSize: 16,
     textAlign: 'center',
   },
-  // Progress Modal styles
+  // Progress modal styles
   progressModalContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
   },
   progressModalContent: {
     backgroundColor: 'white',
@@ -860,7 +736,6 @@ const styles = StyleSheet.create({
   },
   progressErrorText: {
     color: 'red',
-    fontWeight: 'bold',
   },
   progressSuccessText: {
     color: 'green',
