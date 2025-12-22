@@ -508,7 +508,7 @@ export default function RealTimeRecognitionScreen() {
           video: `${videoW}x${videoH}`,
         });
 
-        const alpha = 0.35;
+        const alpha = 0.75;
         const isAndroid = Platform.OS === 'android';
 
         const next: FaceBoxUI[] = payload.faces.map((b) => {
@@ -553,7 +553,6 @@ export default function RealTimeRecognitionScreen() {
               b.hubId = Number(b.hubId);
             const user =  queryUserByFaceId(b.hubId);
             if(user){
-                console.info('queryUserByFaceId', user);
                 ui.name = user.name || '未注册';
             }
           }
