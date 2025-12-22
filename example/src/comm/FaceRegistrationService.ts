@@ -9,7 +9,7 @@ import { apiFind } from '../api';
 import {
   insertName,
   queryUsersByOrgId,
-  deleteUsersByOrgId, getAllUsers,
+  deleteUsersByOrgId, getAllUsers, deleteById,
 } from './FaceDB';
 
 // Helper to force UI update
@@ -167,12 +167,16 @@ export class FaceRegistrationService {
       }
 
       // 2. 清空当前校区的旧数据
-      await updateProgress(`正在清空校区 "${selectedCampus.VCNAME}" 的旧数据...`);
+      await updateProgress(`正在清空旧数据...`);
       const usersToDelete = await getAllUsers();
-      for (const user of usersToDelete) {
-        await InspireFace.featureHubFaceRemove(user.id);
+      const existingIds = InspireFace.featureHubGetExistingIds();
+      for (const hubId of existingIds) {
+        await InspireFace.featureHubFaceRemove(hubId);
+        await updateProgress(`已删除人脸库${hubId} 记录。`);
       }
-      await deleteUsersByOrgId(String(selectedCampus.ID));
+      for (const user of usersToDelete) {
+        await deleteById(user.id);
+      }
       await updateProgress(`已删除 ${usersToDelete.length} 条旧记录。`);
 
       // 3. 注册学生

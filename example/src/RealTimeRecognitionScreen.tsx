@@ -697,7 +697,7 @@ export default function RealTimeRecognitionScreen() {
                 y: by,
                 width: bw,
                 height: bh,
-                trackId: Number(f.trackId ?? i),
+                trackId: Number(i+1),
                 hubId: searched?.id || -1,
                 name: '',
                 confidence,
