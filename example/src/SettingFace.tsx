@@ -180,9 +180,12 @@ const SettingFace = ({ route }: any) => {
     setProgressFailed(0);
     setElapsedTime('');
 
+    // 只有在开始新的处理任务时才重置进度计数
+    setProgressCurrent(0);
+    setProgressTotal(0);
+
     try {
       // 调用 FaceRegistrationService 的 reloadCampusPhotos 方法
-      // 注意：我们传递一个空函数作为第三个参数，因为我们不需要它
       await faceRegistrationService.reloadCampusPhotos(
         selectedCampus,
         async (detail: string, type: LogEntry['type'] = 'log') => {
@@ -198,7 +201,18 @@ const SettingFace = ({ route }: any) => {
           // 让出执行权给 UI 线程
           await yieldToMain();
         },
-        () => {} // 传递一个空函数作为 onProgressUpdate 参数
+        (progress) => {
+          // 更新进度状态
+          setProgressTotal(progress.total);
+          setProgressCurrent(progress.current);
+          setProgressFailed(progress.failed);
+
+          // 如果完成了，设置耗时
+          if (progress.isComplete) {
+            setElapsedTime(progress.elapsedTime);
+            setIsSuccess(progress.isSuccess);
+          }
+        }
       );
 
       setIsSuccess(true);
@@ -209,6 +223,7 @@ const SettingFace = ({ route }: any) => {
     } finally {
       setIsBeginFace(true); // 加载完成后启用"开始刷脸"按钮
       setProgressComplete(true);
+      // 不再重置 progressCurrent 和 progressTotal，保持最后的统计值
     }
   };
 
@@ -222,7 +237,10 @@ const SettingFace = ({ route }: any) => {
 
   useEffect(() => {
     if (isProgressVisible) {
-      progressScrollViewRef.current?.scrollToEnd({ animated: true });
+      // 使用setTimeout确保在UI渲染完成后再滚动
+      setTimeout(() => {
+        progressScrollViewRef.current?.scrollToEnd({ animated: true });
+      }, 100);
     }
   }, [progressLog, isProgressVisible]);
 
@@ -425,13 +443,13 @@ const SettingFace = ({ route }: any) => {
               maximumValue={100}
               step={1}
               value={faceQuality}
-              onSlidingComplete={setFaceQuality}
+onSlidingComplete={setFaceQuality}
             />
             <Text style={styles.sliderValue}>{faceQuality}</Text>
           </View>
 
           <View style={styles.row}>
-            <Text style={styles.label}>置信度阈值:</Text>
+<Text style={styles.label}>置信度阈值:</Text>
             <Slider
               style={styles.slider}
               minimumValue={1}
@@ -494,7 +512,6 @@ const SettingFace = ({ route }: any) => {
           <Text style={styles.buttonText}>开始刷脸</Text>
         </TouchableOpacity>
       </View>
-
       <Modal
         animationType="fade"
         transparent={true}
@@ -516,6 +533,8 @@ const SettingFace = ({ route }: any) => {
               ref={progressScrollViewRef}
               style={styles.progressLogContainer}
               nestedScrollEnabled={true}
+              showsVerticalScrollIndicator={true} // 显示滚动条
+              onContentSizeChange={() => progressScrollViewRef.current?.scrollToEnd({ animated: true })} // 内容变化时滚动到底部
             >
               {progressLog.map((log, index) => (
                 <Text
@@ -733,6 +752,7 @@ const styles = StyleSheet.create({
   progressDetailText: {
     fontSize: 12,
     color: '#333',
+    lineHeight: 18, // 增加行高以改善可读性
   },
   progressErrorText: {
     color: 'red',

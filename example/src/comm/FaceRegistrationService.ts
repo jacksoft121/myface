@@ -9,7 +9,7 @@ import { apiFind } from '../api';
 import {
   insertName,
   queryUsersByOrgId,
-  deleteUsersByOrgId,
+  deleteUsersByOrgId, getAllUsers,
 } from './FaceDB';
 
 // Helper to force UI update
@@ -131,6 +131,8 @@ export class FaceRegistrationService {
     };
 
     await updateProgress('正在计算需要处理的照片数量...');
+    let total = 0;
+    let currentCount = 0;
 
     try {
       // 1. 预计算总数
@@ -147,7 +149,7 @@ export class FaceRegistrationService {
 
       const studentsToRegister = studentRes.data?.['#result-set-3'] || [];
       const teachersToRegister = teacherRes.data?.['#result-set-3'] || [];
-      const total = studentsToRegister.length + teachersToRegister.length;
+      total = studentsToRegister.length + teachersToRegister.length;
 
       onProgressUpdate({
         total,
@@ -166,14 +168,12 @@ export class FaceRegistrationService {
 
       // 2. 清空当前校区的旧数据
       await updateProgress(`正在清空校区 "${selectedCampus.VCNAME}" 的旧数据...`);
-      const usersToDelete = await queryUsersByOrgId(String(selectedCampus.ID));
+      const usersToDelete = await getAllUsers();
       for (const user of usersToDelete) {
         await InspireFace.featureHubFaceRemove(user.id);
       }
       await deleteUsersByOrgId(String(selectedCampus.ID));
       await updateProgress(`已删除 ${usersToDelete.length} 条旧记录。`);
-
-      let currentCount = 0;
 
       // 3. 注册学生
       for (const student of studentsToRegister) {
@@ -268,6 +268,7 @@ export class FaceRegistrationService {
       }
 
       await updateProgress('全部处理完成！', 'success');
+      await updateProgress('', 'success');
     } catch (error) {
       const errMsg = (error as Error).message;
       await updateProgress(`发生严重错误: ${errMsg}`, 'error');
@@ -278,8 +279,8 @@ export class FaceRegistrationService {
       const elapsedTime = `耗时: ${duration.toFixed(2)} 秒`;
 
       onProgressUpdate({
-        total: 0,
-        current: 0,
+        total,
+        current: currentCount,
         failed: failedCount,
         logs: [],
         isComplete: true,
