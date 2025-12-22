@@ -9,38 +9,33 @@ import {
   ActivityIndicator,
   Button,
 } from 'react-native';
-import type {RegisteredFacesDTO} from "./dto/DlxTypes";
-import {faceIdMappingStorage, userInfoCacheStorage} from "./comm/GlobalStorage";
+import type { RegisteredFacesDTO } from "./dto/DlxTypes";
+import {debugGetAllRawData, diagnosticTest, getAllUsers} from "./comm/FaceDB";
 
-
-
-
-const RegisterFaces = ({navigation}) => {
+const RegisterFaces = ({ navigation }) => {
   const [faces, setFaces] = useState<RegisteredFacesDTO[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     // 加载所有已注册的人脸信息
-    const loadRegisteredFaces = () => {
+    const loadRegisteredFaces = async () => {
       setLoading(true);
       try {
-        const registeredUserNames = faceIdMappingStorage.getAllKeys();
-        const faceData: RegisteredFacesDTO[] = [];
+        // 从 FaceDB 获取所有用户数据
 
-        for (const userName of registeredUserNames) {
-          const userInfoString = userInfoCacheStorage.getString(userName);
-          const faceId = faceIdMappingStorage.getNumber(userName);
+        const users = await getAllUsers();
+        console.log('从数据库获取到的用户数据:', users); // 添加调试日志
 
-          if (userInfoString && faceId) {
-            const userInfo = JSON.parse(userInfoString);
-            faceData.push({
-              id: userName,
-              faceId: faceId,
-              name: userInfo.name,
-              imageUrl: userInfo.imageUrl,
-            });
-          }
-        }
+        const faceData: RegisteredFacesDTO[] = users.map(user => ({
+          id: user.id, // 使用 dlx_user_id 作为 id
+          faceId: user.id, // 使用数据库中的 id 作为 faceId
+          userId: user.dlx_user_id || '', // 使用 dlx_user_id 作为 userId
+          name: user.name,
+          imageUrl: user.dlx_user_oss_url || '', // 如果有 OSS URL 则使用，否则为空
+          role: user.dlx_user_role || '', // 如果有角色信息则使用，否则为空
+        }));
+
+        console.log('转换后的 faceData:', faceData); // 添加调试日志
         setFaces(faceData);
       } catch (error) {
         console.error('加载已注册人脸信息失败:', error);
@@ -52,7 +47,7 @@ const RegisterFaces = ({navigation}) => {
     loadRegisteredFaces();
   }, []);
 
-  const renderItem = ({ item }: { item: RegisteredFace }) => (
+  const renderItem = ({ item }: { item: RegisteredFacesDTO }) => (
     <View style={styles.card}>
       <Image
         source={{ uri: item.imageUrl || 'https://via.placeholder.com/100' }}
@@ -61,8 +56,9 @@ const RegisterFaces = ({navigation}) => {
       />
       <View style={styles.infoContainer}>
         <Text style={styles.name}>{item.name}</Text>
-        <Text style={styles.idText}>Hub ID: {item.hubId}</Text>
+        <Text style={styles.idText}>Hub ID: {item.faceId}</Text>
         <Text style={styles.idText}>User Tag: {item.id}</Text>
+        {item.role ? <Text style={styles.idText}>Role: {item.role}</Text> : null}
       </View>
     </View>
   );
@@ -71,6 +67,7 @@ const RegisterFaces = ({navigation}) => {
     return (
       <View style={styles.centered}>
         <ActivityIndicator size="large" />
+        <Text style={{ marginTop: 10 }}>加载中...</Text>
       </View>
     );
   }
@@ -86,7 +83,7 @@ const RegisterFaces = ({navigation}) => {
         <FlatList
           data={faces}
           renderItem={renderItem}
-          keyExtractor={(item) => item.id}
+          keyExtractor={(item) => item.id.toString()}
           contentContainerStyle={styles.list}
         />
       )}

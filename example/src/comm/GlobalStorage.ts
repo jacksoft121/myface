@@ -34,8 +34,9 @@ export const STORAGE_KEYS = {
   REGISTERED_FACES: 'registeredFaces',
 };
 export const DLX_CONFIG = {
+  USER_DB_PATH: 'dlx_user.db',//模型数据库路径
   INSPIREFACE_MODEL_NAME: 'Pikachu',// 模型名称
-  INSPIREFACE_DB_PATH: 'dlx_szstg.db',//模型数据库路径
+  INSPIREFACE_DB_PATH: 'dlx_face.db',//模型数据库路径
   INSPIREFACE_SEARCH_THRESHOLD: 0.42, // 优化后的搜索阈值
   INSPIREFACE_SEARCH_MODE: SearchMode.EXHAUSTIVE,
   INSPIREFACE_SRC_W: 320,// 模型输入图片宽度

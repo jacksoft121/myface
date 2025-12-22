@@ -43,6 +43,7 @@ import { useSharedValue } from 'react-native-reanimated';
 import { type RegisteredFacesDTO, type FaceBoxBuf, type FaceBoxUI } from './dto/DlxTypes';
 import { DLX_CONFIG,STORAGE_KEYS, userInfoCacheStorage } from './comm/GlobalStorage';
 import { log } from './comm/logger';
+import {queryUserByFaceId} from "./comm/FaceDB";
 
 // ===================== 镜像开关（只改这里） =====================
 // 方案A：镜像预览 + 画框不镜像（推荐）
@@ -547,7 +548,14 @@ export default function RealTimeRecognitionScreen() {
             confidence: b.confidence,
             isMatched: b.isMatched,
           };
-
+          if(b.isMatched){
+              b.hubId = Number(b.hubId);
+            const user =  queryUserByFaceId(b.hubId);
+            if(user){
+                console.info('queryUserByFaceId', user);
+                ui.name = user.name || '未注册';
+            }
+          }
           smoothRef.current.set(id, ui);
           return ui;
         });
@@ -566,9 +574,7 @@ export default function RealTimeRecognitionScreen() {
     (frame: Frame) => {
       'worklet';
 
-      const g: any = globalThis as any;
-      if (g.__dlx_busy) return;
-      g.__dlx_busy = true;
+
 
       try {
         runAtTargetFps(frameProcessorFps, () => {
@@ -677,13 +683,16 @@ export default function RealTimeRecognitionScreen() {
               try {
                 const feature = session.extractFaceFeature(imageStream, f.token);
                 searched = unboxed.featureHubFaceSearch(feature);
-              } catch {
+                console.info('识别成功:', searched.id, '置信度:', searched.confidence);
+
+              } catch (error:Error) {
+                console.error('特征提取或识别失败:', error.message);
                 searched = { name: '识别失败', confidence: 0 };
               }
 
               const name = searched?.name || '未注册';
               const confidence = searched?.confidence || 0;
-              const isMatched = !!(searched?.name && confidence > 0.5);
+              const isMatched = !!(searched?.id && confidence > 0.5);
 
               out.push({
                 x: bx,
@@ -691,6 +700,7 @@ export default function RealTimeRecognitionScreen() {
                 width: bw,
                 height: bh,
                 trackId: Number(f.trackId ?? i),
+                hubId: searched?.id || -1,
                 name,
                 confidence,
                 isMatched,
@@ -715,7 +725,7 @@ export default function RealTimeRecognitionScreen() {
           }
         });
       } finally {
-        g.__dlx_busy = false;
+
       }
     },
     [resize, boxedSession, reportFacesToJS, cameraType,frameProcessorFps]
@@ -845,7 +855,14 @@ export default function RealTimeRecognitionScreen() {
             <SkiaText
               x={20}
               y={88}
-              text={`base:${debug.base} coord:${debug.coord} video:${debug.video}`}
+              text={`base:${debug.base} coord:${debug.coord}`}
+              font={font}
+              color={COLOR_WHITE}
+            />
+            <SkiaText
+              x={20}
+              y={108}
+              text={`video:${debug.video}`}
               font={font}
               color={COLOR_WHITE}
             />

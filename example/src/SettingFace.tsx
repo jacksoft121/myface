@@ -310,8 +310,9 @@ const SettingFace = () => {
           });
           if (typeof faceId === 'number' && faceId !== -1) {
             await updateProgress(`注册成功，Face ID: ${faceId}，正在写入数据库...`, 'success');
-            await insertName(
+            insertName(
               faceId,
+              student.VCNAME,
               String(student.ID),
               student.VCNAME,
               "2", // role: student
@@ -346,7 +347,7 @@ const SettingFace = () => {
           });
           if (typeof faceId === 'number' && faceId !== -1) {
             await updateProgress(`注册成功，Face ID: ${faceId}，正在写入数据库...`, 'success');
-            await insertName(
+            insertName(
               faceId,
               teacher.VCNAME,
               String(teacher.ID),
