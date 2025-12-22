@@ -338,6 +338,7 @@ function pickBestFormat(device: any) {
 export default function RealTimeRecognitionScreen() {
   const [cameraType, setCameraType] = useState<'front' | 'back'>('front');
   const [frameProcessorFps, setFrameProcessorFps] = useState(DLX_CONFIG.INSPIREFACE_FRAME_PROCESSOR_FPS);
+  const [confidenceThreshold, setConfidenceThreshold] = useState(DLX_CONFIG.INSPIREFACE_CONFIDENCE_THRESHOLD);
   const device = useCameraDevice(cameraType);
   const camera = useRef<Camera>(null);
   const { resize } = useResizePlugin();
@@ -683,16 +684,13 @@ export default function RealTimeRecognitionScreen() {
               try {
                 const feature = session.extractFaceFeature(imageStream, f.token);
                 searched = unboxed.featureHubFaceSearch(feature);
-                console.info('识别成功:', searched.id, '置信度:', searched.confidence);
-
+                // console.info('识别成功:', searched.id, '置信度:', searched.confidence);
               } catch (error:Error) {
                 console.error('特征提取或识别失败:', error.message);
-                searched = { name: '识别失败', confidence: 0 };
               }
 
-              const name = searched?.name || '未注册';
               const confidence = searched?.confidence || 0;
-              const isMatched = !!(searched?.id && confidence > 0.5);
+              const isMatched = !!(searched?.id && confidence > confidenceThreshold);
 
               out.push({
                 x: bx,
@@ -701,7 +699,7 @@ export default function RealTimeRecognitionScreen() {
                 height: bh,
                 trackId: Number(f.trackId ?? i),
                 hubId: searched?.id || -1,
-                name,
+                name: '',
                 confidence,
                 isMatched,
               });
@@ -728,7 +726,7 @@ export default function RealTimeRecognitionScreen() {
 
       }
     },
-    [resize, boxedSession, reportFacesToJS, cameraType,frameProcessorFps]
+    [resize, boxedSession, reportFacesToJS, cameraType, frameProcessorFps, confidenceThreshold]
   );
 
   const toggleCamera = useCallback(() => {
