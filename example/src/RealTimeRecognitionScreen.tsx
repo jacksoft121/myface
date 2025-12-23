@@ -1,5 +1,5 @@
 import 'react-native-worklets-core';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {
   ActivityIndicator,
   Dimensions,
@@ -9,7 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useFocusEffect, useIsFocused } from '@react-navigation/native';
+import {useFocusEffect, useIsFocused} from '@react-navigation/native';
 
 import {
   BoxedInspireFace,
@@ -17,7 +17,7 @@ import {
   DetectMode,
   InspireFace,
 } from 'react-native-nitro-inspire-face';
-import { NitroModules } from 'react-native-nitro-modules';
+import {NitroModules} from 'react-native-nitro-modules';
 
 import {
   Camera,
@@ -26,7 +26,7 @@ import {
   runAtTargetFps,
   type Frame,
 } from 'react-native-vision-camera';
-import { useResizePlugin } from 'vision-camera-resize-plugin';
+import {useResizePlugin} from 'vision-camera-resize-plugin';
 
 import {
   check,
@@ -36,13 +36,13 @@ import {
   RESULTS,
 } from 'react-native-permissions';
 
-import { Worklets } from 'react-native-worklets-core';
-import { Canvas, Rect, Text as SkiaText, useFont } from '@shopify/react-native-skia';
-import { useSharedValue } from 'react-native-reanimated';
+import {Worklets} from 'react-native-worklets-core';
+import {Canvas, Rect, Text as SkiaText, useFont} from '@shopify/react-native-skia';
+import {useSharedValue} from 'react-native-reanimated';
 
-import { type RegisteredFacesDTO, type FaceBoxBuf, type FaceBoxUI } from './dto/DlxTypes';
-import { DLX_CONFIG,STORAGE_KEYS, userInfoCacheStorage } from './comm/GlobalStorage';
-import { log } from './comm/logger';
+import {type RegisteredFacesDTO, type FaceBoxBuf, type FaceBoxUI} from './dto/DlxTypes';
+import {DLX_CONFIG, STORAGE_KEYS, userInfoCacheStorage} from './comm/GlobalStorage';
+import {log} from './comm/logger';
 import {queryUserByFaceId} from "./comm/FaceDB";
 
 // ===================== 镜像开关（只改这里） =====================
@@ -66,7 +66,7 @@ if (!gAny.__IFACE_LAUNCHED) {
 }
 
 // ===================== Const =====================
-const { width: PREVIEW_W, height: PREVIEW_H } = Dimensions.get('window');
+const {width: PREVIEW_W, height: PREVIEW_H} = Dimensions.get('window');
 
 // ✅ 输入给 SDK 的稳定尺寸：永远 640x480
 const SRC_W = DLX_CONFIG.INSPIREFACE_SRC_W;
@@ -102,11 +102,16 @@ function getFrameRotationDegrees(frame: Frame) {
   if (typeof r === 'number') return r; // 0/90/180/270
 
   switch (frame.orientation) {
-    case 'portrait': return 0;
-    case 'portrait-upside-down': return 180;
-    case 'landscape-left': return 90;
-    case 'landscape-right': return 270;
-    default: return 0;
+    case 'portrait':
+      return 0;
+    case 'portrait-upside-down':
+      return 180;
+    case 'landscape-left':
+      return 90;
+    case 'landscape-right':
+      return 270;
+    default:
+      return 0;
   }
 }
 
@@ -122,8 +127,8 @@ function toCameraRotation(deg: number) {
 function uprightSizeForRotation(deg: number) {
   'worklet';
   const d = ((deg % 360) + 360) % 360;
-  if (d === 90 || d === 270) return { w: SRC_H, h: SRC_W }; // 480x640
-  return { w: SRC_W, h: SRC_H }; // 640x480
+  if (d === 90 || d === 270) return {w: SRC_H, h: SRC_W}; // 480x640
+  return {w: SRC_W, h: SRC_H}; // 640x480
 }
 
 function normalizeRectToPx(rect: any, W: number, H: number) {
@@ -135,9 +140,12 @@ function normalizeRectToPx(rect: any, W: number, H: number) {
 
   // 兼容 0~1
   if (w <= 1.5 && h <= 1.5) {
-    x *= W; y *= H; w *= W; h *= H;
+    x *= W;
+    y *= H;
+    w *= W;
+    h *= H;
   }
-  return { x, y, width: w, height: h };
+  return {x, y, width: w, height: h};
 }
 
 // ===================== Smart transform (fix diagonal / wrong rotation) =====================
@@ -167,22 +175,22 @@ function scoreRect(
 
 function transposeRect(r: { x: number; y: number; width: number; height: number }) {
   'worklet';
-  return { x: r.y, y: r.x, width: r.height, height: r.width };
+  return {x: r.y, y: r.x, width: r.height, height: r.width};
 }
 
 function rot90CW(r: { x: number; y: number; width: number; height: number }, W: number, H: number) {
   'worklet';
-  return { x: H - (r.y + r.height), y: r.x, width: r.height, height: r.width, outW: H, outH: W };
+  return {x: H - (r.y + r.height), y: r.x, width: r.height, height: r.width, outW: H, outH: W};
 }
 
 function rot90CCW(r: { x: number; y: number; width: number; height: number }, W: number, H: number) {
   'worklet';
-  return { x: r.y, y: W - (r.x + r.width), width: r.height, height: r.width, outW: H, outH: W };
+  return {x: r.y, y: W - (r.x + r.width), width: r.height, height: r.width, outW: H, outH: W};
 }
 
 function rot180(r: { x: number; y: number; width: number; height: number }, W: number, H: number) {
   'worklet';
-  return { x: W - (r.x + r.width), y: H - (r.y + r.height), width: r.width, height: r.height, outW: W, outH: H };
+  return {x: W - (r.x + r.width), y: H - (r.y + r.height), width: r.width, height: r.height, outW: W, outH: H};
 }
 
 /**
@@ -201,8 +209,8 @@ function baseRectToUprightSmart(
   'worklet';
   const d = ((rotDeg % 360) + 360) % 360;
 
-  if (d === 0) return { ...rawBase, outW: SRC_W, outH: SRC_H, mode: 0, anchor: 0 };
-  if (d === 180) return { ...rot180(rawBase, SRC_W, SRC_H), mode: 0, anchor: 0 };
+  if (d === 0) return {...rawBase, outW: SRC_W, outH: SRC_H, mode: 0, anchor: 0};
+  if (d === 180) return {...rot180(rawBase, SRC_W, SRC_H), mode: 0, anchor: 0};
 
   const want270 = (d === 270);
 
@@ -233,7 +241,7 @@ function baseRectToUprightSmart(
     }
   }
 
-  return { ...best, mode: bestMode, anchor: 0 };
+  return {...best, mode: bestMode, anchor: 0};
 }
 
 // ===================== 自动按 VisionCamera 实际预览比例映射（关键修复） =====================
@@ -242,9 +250,9 @@ function getUprightVideoSize(rotDeg: number, format: any) {
   const fw = Number(format?.videoWidth ?? 0);
   const fh = Number(format?.videoHeight ?? 0);
   const d = ((rotDeg % 360) + 360) % 360;
-  if (!fw || !fh) return { w: 0, h: 0 };
-  if (d === 90 || d === 270) return { w: fh, h: fw };
-  return { w: fw, h: fh };
+  if (!fw || !fh) return {w: 0, h: 0};
+  if (d === 90 || d === 270) return {w: fh, h: fw};
+  return {w: fw, h: fh};
 }
 
 /**
@@ -262,7 +270,7 @@ function mapRectToView(
   rotDeg: number,
   isFrontCamera: boolean,
   isAndroid: boolean,
-  resizeMode: 'contain' | 'cover' = 'contain' // 新增参数
+  resizeMode: string
 ) {
   'worklet';
 
@@ -341,21 +349,21 @@ export default function RealTimeRecognitionScreen() {
   const [confidenceThreshold, setConfidenceThreshold] = useState(DLX_CONFIG.INSPIREFACE_CONFIDENCE_THRESHOLD);
   const device = useCameraDevice(cameraType);
   const camera = useRef<Camera>(null);
-  const { resize } = useResizePlugin();
+  const {resize} = useResizePlugin();
 
   const [hubFaceCount, setHubFaceCount] = useState(0);
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [boxes, setBoxes] = useState<FaceBoxUI[]>([]);
   const [isCameraActive, setIsCameraActive] = useState(false);
 
-  const canvasSize = useSharedValue({ width: PREVIEW_W, height: PREVIEW_H });
+  const canvasSize = useSharedValue({width: PREVIEW_W, height: PREVIEW_H});
   const font = useFont(require('./assets/fonts/PingFangSC-Regular.ttf'), 18);
 
   const [cameraInitialized, setCameraInitialized] = useState(false);
   const isFocused = useIsFocused();
 
   // ✅ 定义当前的 resizeMode，方便统一修改
-  const CURRENT_RESIZE_MODE: 'contain' | 'cover' = 'cover';
+  const CURRENT_RESIZE_MODE: 'contain' | 'cover' = 'contain';
 
   const [debug, setDebug] = useState({
     faceCount: 0,
@@ -439,7 +447,7 @@ export default function RealTimeRecognitionScreen() {
     if (sessionRef.current) return sessionRef.current;
 
     const s = InspireFace.createSession(
-      { enableRecognition: true, enableFaceQuality: true },
+      {enableRecognition: true, enableFaceQuality: true},
       DetectMode.ALWAYS_DETECT,
       5,
       -1,
@@ -494,7 +502,7 @@ export default function RealTimeRecognitionScreen() {
         const vw = canvasSize.value?.width || PREVIEW_W;
         const vh = canvasSize.value?.height || PREVIEW_H;
 
-        const { w: videoW0, h: videoH0 } = getUprightVideoSize(payload.rotDeg, format);
+        const {w: videoW0, h: videoH0} = getUprightVideoSize(payload.rotDeg, format);
         const videoW = videoW0 || payload.coordW;
         const videoH = videoH0 || payload.coordH;
 
@@ -549,11 +557,11 @@ export default function RealTimeRecognitionScreen() {
             confidence: b.confidence,
             isMatched: b.isMatched,
           };
-          if(b.isMatched){
-              b.hubId = Number(b.hubId);
-            const user =  queryUserByFaceId(b.hubId);
-            if(user){
-                ui.name = user.name || '未注册';
+          if (b.isMatched) {
+            b.hubId = Number(b.hubId);
+            const user = queryUserByFaceId(b.hubId);
+            if (user) {
+              ui.name = user.name || '未注册';
             }
           }
           smoothRef.current.set(id, ui);
@@ -575,7 +583,6 @@ export default function RealTimeRecognitionScreen() {
       'worklet';
 
 
-
       try {
         runAtTargetFps(frameProcessorFps, () => {
           'worklet';
@@ -595,7 +602,16 @@ export default function RealTimeRecognitionScreen() {
             });
 
             if (!resized?.buffer) {
-              reportFacesToJS({ faceCount: 0, rotDeg: 0, mode: 0, anchor: 0, coordW: SRC_W, coordH: SRC_H, faces: [], isFrontCamera: isFront });
+              reportFacesToJS({
+                faceCount: 0,
+                rotDeg: 0,
+                mode: 0,
+                anchor: 0,
+                coordW: SRC_W,
+                coordH: SRC_H,
+                faces: [],
+                isFrontCamera: isFront
+              });
               return;
             }
 
@@ -608,7 +624,16 @@ export default function RealTimeRecognitionScreen() {
 
             const unboxed = BoxedInspireFace.unbox();
             if (!unboxed) {
-              reportFacesToJS({ faceCount: 0, rotDeg, mode: 0, anchor: 0, coordW: uprightW, coordH: uprightH, faces: [], isFrontCamera: isFront });
+              reportFacesToJS({
+                faceCount: 0,
+                rotDeg,
+                mode: 0,
+                anchor: 0,
+                coordW: uprightW,
+                coordH: uprightH,
+                faces: [],
+                isFrontCamera: isFront
+              });
               return;
             }
 
@@ -617,7 +642,16 @@ export default function RealTimeRecognitionScreen() {
 
             const session = boxedSession.unbox();
             if (!session) {
-              reportFacesToJS({ faceCount: 0, rotDeg, mode: 0, anchor: 0, coordW: uprightW, coordH: uprightH, faces: [], isFrontCamera: isFront });
+              reportFacesToJS({
+                faceCount: 0,
+                rotDeg,
+                mode: 0,
+                anchor: 0,
+                coordW: uprightW,
+                coordH: uprightH,
+                faces: [],
+                isFrontCamera: isFront
+              });
               return;
             }
 
@@ -631,7 +665,16 @@ export default function RealTimeRecognitionScreen() {
             })();
 
             if (faceCount <= 0) {
-              reportFacesToJS({ faceCount: 0, rotDeg, mode: 0, anchor: 0, coordW: uprightW, coordH: uprightH, faces: [], isFrontCamera: isFront });
+              reportFacesToJS({
+                faceCount: 0,
+                rotDeg,
+                mode: 0,
+                anchor: 0,
+                coordW: uprightW,
+                coordH: uprightH,
+                faces: [],
+                isFrontCamera: isFront
+              });
               return;
             }
 
@@ -641,12 +684,13 @@ export default function RealTimeRecognitionScreen() {
 
             // ✅ 镜像只发生一次：看顶部开关
             const mirrorUI = isFront && MIRROR_ON_OVERLAY;
-
-            let chosenMode = 0;
-            let chosenAnchor = 0;
-
             const out: FaceBoxBuf[] = [];
 
+            // 移除全局的chosenMode和chosenAnchor变量
+            // let chosenMode = 0;
+            // let chosenAnchor = 0;
+
+            // 在for循环内部为每个人脸计算独立的转换参数
             for (let i = 0; i < faceCount; i++) {
               const f = facesAny[i] ?? {
                 token: facesAny.tokens?.[i],
@@ -655,23 +699,29 @@ export default function RealTimeRecognitionScreen() {
               };
               if (!f?.rect || !f?.token) continue;
 
+              // 获取人脸关键点
+              // val facePoints = unboxed.getFaceDenseLandmarkFromFaceToken(f.token)
+
+
               const rawBase = normalizeRectToPx(f.rect, SRC_W, SRC_H);
 
-              // ✅ 智能把 base rect 转到 upright rect（修复对角线/方向反）
+              // ✅ 为每个人脸智能转换base rect到upright rect
               const smart = baseRectToUprightSmart(rawBase, rotDeg, uprightW, uprightH);
-              if (i === 0) {
-                chosenMode = smart.mode;
-                chosenAnchor = smart.anchor ?? 0;
-              }
+
+              // 不再只为第一张脸设置转换参数，每个人脸都有自己的mode和anchor
+              // if (i === 0) {
+              //   chosenMode = smart.mode;
+              //   chosenAnchor = smart.anchor ?? 0;
+              // }
 
               let rU = smart; // x/y/width/height/outW/outH
 
               if (SDK_Y_ORIGIN_BOTTOM) {
-                rU = { ...rU, y: rU.outH - (rU.y + rU.height) };
+                rU = {...rU, y: rU.outH - (rU.y + rU.height)};
               }
 
               if (mirrorUI) {
-                rU = { ...rU, x: rU.outW - (rU.x + rU.width) };
+                rU = {...rU, x: rU.outW - (rU.x + rU.width)};
               }
 
               const bx = clamp(rU.x, -rU.outW, rU.outW * 2);
@@ -684,7 +734,7 @@ export default function RealTimeRecognitionScreen() {
                 const feature = session.extractFaceFeature(imageStream, f.token);
                 searched = unboxed.featureHubFaceSearch(feature);
                 // console.info('识别成功:', searched.id, '置信度:', searched.confidence);
-              } catch (error:Error) {
+              } catch (error: Error) {
                 console.error('特征提取或识别失败:', error.message);
               }
 
@@ -696,29 +746,47 @@ export default function RealTimeRecognitionScreen() {
                 y: by,
                 width: bw,
                 height: bh,
-                trackId: Number(i+1),
+                trackId: Number(i + 1),
                 hubId: searched?.id || -1,
                 name: '',
                 confidence,
                 isMatched,
+                mode: smart.mode,  // 添加：存储每个人脸的转换模式
+                anchor: smart.anchor,  // 添加：存储每个人脸的转换锚点
               });
             }
 
             reportFacesToJS({
               faceCount,
               rotDeg,
-              mode: chosenMode,
-              anchor: chosenAnchor,
+              // 不再使用全局的转换参数
+              // mode: chosenMode,
+              // anchor: chosenAnchor,
               coordW,
               coordH,
               faces: out,
               isFrontCamera: isFront,
             });
           } catch {
-            reportFacesToJS({ faceCount: 0, rotDeg: 0, mode: 0, anchor: 0, coordW: SRC_W, coordH: SRC_H, faces: [], isFrontCamera: isFront });
+            reportFacesToJS({
+              faceCount: 0,
+              rotDeg: 0,
+              mode: 0,
+              anchor: 0,
+              coordW: SRC_W,
+              coordH: SRC_H,
+              faces: [],
+              isFrontCamera: isFront
+            });
           } finally {
-            try { if (imageStream) imageStream.dispose(); } catch {}
-            try { if (bitmap) bitmap.dispose(); } catch {}
+            try {
+              if (imageStream) imageStream.dispose();
+            } catch {
+            }
+            try {
+              if (bitmap) bitmap.dispose();
+            } catch {
+            }
           }
         });
       } finally {
@@ -747,7 +815,7 @@ export default function RealTimeRecognitionScreen() {
   if (hasPermission === null) {
     return (
       <View style={styles.container}>
-        <ActivityIndicator size="large" color="#ffffff" />
+        <ActivityIndicator size="large" color="#ffffff"/>
         <Text style={styles.text}>Requesting camera permission...</Text>
       </View>
     );
@@ -827,7 +895,7 @@ export default function RealTimeRecognitionScreen() {
                 style="stroke"
                 strokeWidth={3}
               />
-              <Rect x={bgX} y={bgY} width={textW} height={textH} color={bgColor} />
+              <Rect x={bgX} y={bgY} width={textW} height={textH} color={bgColor}/>
               <SkiaText
                 x={bgX + padX}
                 y={bgY + textH - padY - 4}
@@ -841,7 +909,7 @@ export default function RealTimeRecognitionScreen() {
 
         {font && (
           <>
-            <Rect x={10} y={40} width={760} height={78} color={BG_BLACK50} />
+            <Rect x={10} y={40} width={760} height={78} color={BG_BLACK50}/>
             <SkiaText
               x={20}
               y={65}
@@ -887,9 +955,9 @@ export default function RealTimeRecognitionScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'black' },
-  text: { color: 'white', fontSize: 16, marginTop: 10 },
-  linkText: { color: '#007AFF', fontSize: 16, marginTop: 10 },
+  container: {flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'black'},
+  text: {color: 'white', fontSize: 16, marginTop: 10},
+  linkText: {color: '#007AFF', fontSize: 16, marginTop: 10},
   controlsContainer: {
     position: 'absolute',
     bottom: 40,
@@ -906,7 +974,7 @@ const styles = StyleSheet.create({
     minWidth: 100,
     alignItems: 'center',
   },
-  buttonText: { color: 'white', fontSize: 16, fontWeight: 'bold' },
-  primaryButton: { backgroundColor: 'rgba(0, 122, 255, 0.8)' },
-  dangerButton: { backgroundColor: 'rgba(255, 59, 48, 0.8)' },
+  buttonText: {color: 'white', fontSize: 16, fontWeight: 'bold'},
+  primaryButton: {backgroundColor: 'rgba(0, 122, 255, 0.8)'},
+  dangerButton: {backgroundColor: 'rgba(255, 59, 48, 0.8)'},
 });

@@ -34,4 +34,7 @@ export type FaceBoxBuf = {
   trackId: number;
   confidence?: number;
   isMatched?: boolean;
+  mode?: number;  // 添加：存储每个人脸的转换模式
+  anchor?: number;  // 添加：存储每个人脸的转换锚点
 };
+
