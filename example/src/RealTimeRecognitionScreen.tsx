@@ -8,7 +8,7 @@ import {
   Text,
   TouchableOpacity,
   View,
-  useWindowDimensions, Image,
+  useWindowDimensions, Image, Pressable, Modal,
 } from 'react-native';
 import {useFocusEffect, useIsFocused} from '@react-navigation/native';
 
@@ -441,6 +441,8 @@ export default function RealTimeRecognitionScreen() {
     uri: null,
     name: ''
   });
+  const [isModalVisible, setIsModalVisible] = useState(false);
+
   const saveImage = useMemo(
     () =>
       Worklets.createRunOnJS(
@@ -861,14 +863,20 @@ export default function RealTimeRecognitionScreen() {
       <View id="showview" style={[styles.showView, { width: cameraW, height: showH }]}>
         <View style={styles.showViewContent}>
 
-          {/* 左侧 1/5：抓拍图 */}
+          {/* 左侧 2/5：抓拍图 */}
           <View style={styles.captureLeft}>
             {lastCapture.uri ? (
-              <Image
-                source={{ uri: lastCapture.uri }}
-                style={styles.capturedImage}
-                resizeMode="cover"
-              />
+              <TouchableOpacity
+                style={styles.capturedImageContainer}
+                onPress={() => setIsModalVisible(true)}
+              >
+                <Image
+                  source={{ uri: lastCapture.uri }}
+                  style={styles.capturedImage}
+                  // 使用 cover 确保图片填满容器比例且不拉伸
+                  resizeMode="cover"
+                />
+              </TouchableOpacity>
             ) : (
               <View style={styles.imagePlaceholder}>
                 <Text style={styles.placeholderText}>等待抓拍</Text>
@@ -876,7 +884,7 @@ export default function RealTimeRecognitionScreen() {
             )}
           </View>
 
-          {/* 右侧 4/5：姓名展示 */}
+          {/* 右侧 3/5：姓名展示 */}
           <View style={styles.nameRight}>
             <Text style={styles.labelTitle}>识别结果</Text>
             <Text style={styles.resultName}>{lastCapture.name || '---'}</Text>
@@ -884,6 +892,27 @@ export default function RealTimeRecognitionScreen() {
 
         </View>
       </View>
+      {/* 全屏查看 Modal */}
+      <Modal
+        visible={isModalVisible}
+        transparent={true}
+        onRequestClose={() => setIsModalVisible(false)}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setIsModalVisible(false)}
+        >
+          <Image
+            source={{ uri: lastCapture.uri || '' }}
+            style={styles.fullImage}
+            resizeMode="contain" // 全屏查看时显示完整图片
+          />
+          <View style={styles.closeHint}>
+            <Text style={styles.closeHintText}>点击任意位置关闭</Text>
+          </View>
+        </Pressable>
+      </Modal>
+
     </View>
   );
 }
@@ -931,13 +960,51 @@ const styles = StyleSheet.create({
     flexDirection: 'row', // 水平排列
   },
   captureLeft: {
-    flex: 2, // 占 1/5
+    flex: 2,
     borderRightWidth: 1,
     borderRightColor: '#333',
+    padding: 8, // 增加内边距
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 5,
   },
+  capturedImageContainer: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 8,
+    overflow: 'hidden', // 确保图片不超出圆角
+    backgroundColor: '#000',
+    // 强制保持容器比例（可选，如果 flex 已经决定了比例则不需要）
+    aspectRatio: 1,
+  },
+  capturedImage: {
+    width: '100%',
+    height: '100%',
+  },
+
+  // Modal 样式
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.95)', // 极深色背景
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fullImage: {
+    width: PREVIEW_W,
+    height: PREVIEW_H,
+  },
+  closeHint: {
+    position: 'absolute',
+    bottom: 50,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+  },
+  closeHintText: {
+    color: '#fff',
+    fontSize: 14,
+  },
+
   nameRight: {
     flex: 3, // 占 4/5
     justifyContent: 'center',
