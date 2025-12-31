@@ -860,7 +860,7 @@ export default function RealTimeRecognitionScreen() {
       </View>
 
       {/* 底部显示区域 */}
-      <View id="showview" style={[styles.showView, { width: cameraW, height: showH }]}>
+      <View id="showview" style={[styles.showView, { }]}>
         <View style={styles.showViewContent}>
 
           {/* 左侧 2/5：抓拍图 */}
@@ -873,8 +873,9 @@ export default function RealTimeRecognitionScreen() {
                 <Image
                   source={{ uri: lastCapture.uri }}
                   style={styles.capturedImage}
-                  // 使用 cover 确保图片填满容器比例且不拉伸
-                  resizeMode="cover"
+                  // contain: 保证图片完整显示在框内
+                  // cover: 保证图片填满框（可能会切掉人脸边缘）
+                  resizeMode="contain"
                 />
               </TouchableOpacity>
             ) : (
@@ -951,46 +952,58 @@ const styles = StyleSheet.create({
     backgroundColor: 'black',
   },
   showView: {
-    backgroundColor: '#1a1a1a', // 深色背景看起来更高端
+    flex: 1, // ✨ 关键：自动占据相机下方的所有剩余空间
+    backgroundColor: '#1a1a1a',
     borderTopWidth: 1,
     borderTopColor: '#333',
+    paddingBottom: 5, // ✨ 增加底部内边距，防止被系统导航条遮挡
   },
   showViewContent: {
     flex: 1,
     flexDirection: 'row', // 水平排列
   },
   captureLeft: {
-    flex: 2,
-    borderRightWidth: 1,
-    borderRightColor: '#333',
-    padding: 8, // 增加内边距
+    flex: 2, // 占 2 份宽度
     justifyContent: 'center',
     alignItems: 'center',
+    padding: 10, // 留一点边距更美观
+    backgroundColor: '#111', // 给个深色底，防止图片比例不符时露白
   },
+
   capturedImageContainer: {
+    // 关键：强制让图片容器在父容器内自适应，且不超出
     width: '100%',
     height: '100%',
     borderRadius: 8,
-    overflow: 'hidden', // 确保图片不超出圆角
-    backgroundColor: '#000',
-    // 强制保持容器比例（可选，如果 flex 已经决定了比例则不需要）
-    aspectRatio: 1,
+    overflow: 'hidden', // 必须：裁剪超出部分
+    borderWidth: 1,
+    borderColor: '#444',
   },
+
   capturedImage: {
     width: '100%',
     height: '100%',
+    // 关键：使用 contain 模式可以完整看到整张图（不裁剪）
+    // 如果你希望填满格子可以使用 cover，但会裁剪边缘
   },
 
-  // Modal 样式
+  nameRight: {
+    flex: 3, // 占 3 份宽度
+    justifyContent: 'center',
+    paddingLeft: 15,
+  },
+
+  // Modal 样式调整
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.95)', // 极深色背景
+    backgroundColor: 'rgba(0,0,0,0.95)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   fullImage: {
-    width: PREVIEW_W,
-    height: PREVIEW_H,
+    // 使用屏幕宽度作为参考，确保全屏显示
+    width: Dimensions.get('window').width,
+    height: Dimensions.get('window').height,
   },
   closeHint: {
     position: 'absolute',
