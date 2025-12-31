@@ -37,13 +37,25 @@ import {
 } from 'react-native-permissions';
 
 import {Worklets} from 'react-native-worklets-core';
-import {Canvas, Rect, Text as SkiaText, useFont} from '@shopify/react-native-skia';
+import {
+  Skia,
+  ColorType,
+  AlphaType,
+  ImageFormat,
+  Canvas,
+  Rect,
+  Text as SkiaText,
+  useFont
+} from '@shopify/react-native-skia';
 import {useSharedValue} from 'react-native-reanimated';
 
 import {type RegisteredFacesDTO, type FaceBoxBuf, type FaceBoxUI} from './dto/DlxTypes';
 import {DLX_CONFIG, STORAGE_KEYS, userInfoCacheStorage} from './comm/GlobalStorage';
 import {log} from './comm/logger';
 import {queryUserByFaceId} from "./comm/FaceDB";
+
+import RNFS from 'react-native-fs';
+
 
 // ===================== 镜像开关（只改这里） =====================
 // 方案A：镜像预览 + 画框不镜像（推荐）
@@ -98,9 +110,6 @@ function clamp(n: number, min: number, max: number) {
 
 function getFrameRotationDegrees(frame: Frame) {
   'worklet';
-  const r = frame.rotation;
-  if (typeof r === 'number') return r; // 0/90/180/270
-
   switch (frame.orientation) {
     case 'portrait':
       return 0;
@@ -261,59 +270,41 @@ function getUprightVideoSize(rotDeg: number, format: any) {
  */
 function mapRectToView(
   b: { x: number; y: number; width: number; height: number },
-  coordW: number,
-  coordH: number,
-  videoW: number,
-  videoH: number,
-  viewW: number,
-  viewH: number,
-  rotDeg: number,
-  isFrontCamera: boolean,
-  isAndroid: boolean,
+  coordW: number, // 这是 SDK 输出的坐标系宽度 (例如 480)
+  coordH: number, // 这是 SDK 输出的坐标系高度 (例如 640)
+  viewW: number,  // 屏幕 Canvas 宽度
+  viewH: number,  // 屏幕 Canvas 高度
   resizeMode: string
 ) {
   'worklet';
 
-  // 1. Map from processing coordinates `(coordW, coordH)` to video coordinates `(videoW, videoH)`.
-  const videoX = (b.x / coordW) * videoW;
-  let videoY = (b.y / coordH) * videoH;
-  const videoW_ = (b.width / coordW) * videoW;
-  const videoH_ = (b.height / coordH) * videoH;
-
-  // 修复：在 90/270 度旋转时，Y 轴方向反了（用户反馈：人脸下移，框上移）
-  // 这种情况通常发生在 Android 前置摄像头上
-  const isRot90 = [90, 270].includes(((rotDeg % 360) + 360) % 360);
-  if (isAndroid && isRot90 && isFrontCamera) {
-    // 翻转 Y 轴: newY = H - (y + h)
-    videoY = videoH - (videoY + videoH_);
-  }
-
-  // 2. Map from video coordinates to view coordinates, respecting resizeMode.
+  // 计算缩放比例：直接计算 SDK 坐标系到 View 坐标系的缩放
   let scale = 1;
   let offsetX = 0;
   let offsetY = 0;
 
   if (resizeMode === 'cover') {
-    scale = Math.max(viewW / videoW, viewH / videoH);
-    offsetX = (viewW - videoW * scale) / 2;
-    offsetY = (viewH - videoH * scale) / 2;
+    scale = Math.max(viewW / coordW, viewH / coordH);
   } else {
-    // contain
-    scale = Math.min(viewW / videoW, viewH / videoH);
-    offsetX = (viewW - videoW * scale) / 2;
-    offsetY = (viewH - videoH * scale) / 2;
+    // contain 模式
+    scale = Math.min(viewW / coordW, viewH / coordH);
   }
 
-  const viewX = videoX * scale + offsetX;
-  const viewY = videoY * scale + offsetY;
-  const viewW_ = videoW_ * scale;
-  const viewH_ = videoH_ * scale;
+  // 计算居中偏移
+  offsetX = (viewW - coordW * scale) / 2;
+  offsetY = (viewH - coordH * scale) / 2;
+
+  // 映射坐标
+  const viewX = b.x * scale + offsetX;
+  const viewY = b.y * scale + offsetY;
+  const viewW_ = b.width * scale;
+  const viewH_ = b.height * scale;
 
   return {
-    x: clamp(viewX, -viewW, viewW * 2),
-    y: clamp(viewY, -viewH, viewH * 2),
-    width: clamp(viewW_, 0, viewW * 2),
-    height: clamp(viewH_, 0, viewH * 2),
+    x: viewX,
+    y: viewY,
+    width: viewW_,
+    height: viewH_,
   };
 }
 
@@ -363,7 +354,7 @@ export default function RealTimeRecognitionScreen() {
   const isFocused = useIsFocused();
 
   // ✅ 定义当前的 resizeMode，方便统一修改
-  const CURRENT_RESIZE_MODE: 'contain' | 'cover' = 'contain';
+  const CURRENT_RESIZE_MODE: 'contain' | 'cover' = 'cover';
 
   const [debug, setDebug] = useState({
     faceCount: 0,
@@ -520,23 +511,18 @@ export default function RealTimeRecognitionScreen() {
         const isAndroid = Platform.OS === 'android';
 
         const next: FaceBoxUI[] = payload.faces.map((b) => {
-          // ✅ 核心修复：传入旋转角度做精准映射
           const mapped = mapRectToView(
             b,
             payload.coordW,
             payload.coordH,
-            videoW,
-            videoH,
             vw,
             vh,
-            payload.rotDeg,
-            payload.isFrontCamera,
-            isAndroid,
-            CURRENT_RESIZE_MODE // 传入当前的 resizeMode
+            CURRENT_RESIZE_MODE
           );
 
+
           // 修正：整体上移，解决框偏下（眉毛到颈部）的问题
-          mapped.y -= mapped.height * FACE_BOX_Y_OFFSET_RATIO;
+          // mapped.y -= mapped.height * FACE_BOX_Y_OFFSET_RATIO;
 
           const id = b.trackId ?? 0;
           const prev = smoothRef.current.get(id);
@@ -578,6 +564,83 @@ export default function RealTimeRecognitionScreen() {
     );
   }, [canvasSize, format]);
 
+
+  // 1. 增加拍照状态
+  const shouldCapture = useMemo(() => Worklets.createSharedValue(false), []); // Worklets-core 方式
+  const [isSaving, setIsSaving] = useState(false);
+
+  const saveImage = useMemo(
+    () =>
+      Worklets.createRunOnJS(
+        async (payload: { base64: string; width: number; height: number; format: 'bgr' | 'rgba' }) => {
+          console.log('--- JS线程: saveImage 开始处理 ---');
+          setIsSaving(true);
+
+          try {
+            const { base64, width, height, format } = payload;
+
+            // 1) base64 -> ArrayBuffer -> Uint8Array
+            console.log('base64.len=', base64?.length);
+            const unboxed = BoxedInspireFace.unbox();
+            const buffer: ArrayBuffer = unboxed.fromBase64(base64);
+            const srcPixels = new Uint8Array(buffer);
+
+            const expectedLen = format === 'bgr' ? width * height * 3 : width * height * 4;
+            console.log(`JS线程: 尺寸 ${width}x${height}, format=${format}, 数据长度: ${srcPixels.length}, expected=${expectedLen}`);
+
+            if (srcPixels.length < expectedLen) {
+              throw new Error(`像素长度不匹配：got=${srcPixels.length}, expected=${expectedLen}`);
+            }
+
+            let rgbaPixels: Uint8Array;
+
+            // 2) 转 RGBA
+            if (format === 'bgr') {
+              rgbaPixels = new Uint8Array(width * height * 4);
+              // BGR(3) -> RGBA(4)
+              for (let i = 0; i < width * height; i++) {
+                const srcIdx = i * 3;
+                const dstIdx = i * 4;
+                rgbaPixels[dstIdx + 0] = srcPixels[srcIdx + 2]; // R
+                rgbaPixels[dstIdx + 1] = srcPixels[srcIdx + 1]; // G
+                rgbaPixels[dstIdx + 2] = srcPixels[srcIdx + 0]; // B
+                rgbaPixels[dstIdx + 3] = 255;                   // A
+              }
+            } else {
+              // rgba：直接用（可拷贝一份更保险）
+              rgbaPixels = srcPixels;
+              // rgbaPixels = new Uint8Array(srcPixels.buffer.slice(0, expectedLen));
+            }
+
+            // 3) 创建 Skia Image
+            const imageInfo = {
+              width,
+              height,
+              colorType: ColorType.RGBA_8888,
+              alphaType: AlphaType.Opaque, // 你这里 A 要么 255，要么仍然可以写 Premul；Opaque 最快
+            };
+
+            const img = Skia.Image.MakeImage(imageInfo, Skia.Data.fromBytes(rgbaPixels), width * 4);
+            if (!img) throw new Error('Skia.Image.MakeImage 失败');
+
+            // 4) 编码保存
+            const b64 = img.encodeToBase64(ImageFormat.JPEG, 90);
+            const path = `${RNFS.CachesDirectoryPath}/face_${Date.now()}.jpg`;
+            await RNFS.writeFile(path, b64, 'base64');
+
+            console.log('--- 抓拍成功 --- 路径:', path);
+          } catch (e: any) {
+            console.error('JS线程: 保存流程发生错误:', e?.message ?? e);
+          } finally {
+            setIsSaving(false);
+          }
+        }
+      ),
+    []
+  );
+
+
+
   const frameProcessor = useFrameProcessor(
     (frame: Frame) => {
       'worklet';
@@ -587,14 +650,54 @@ export default function RealTimeRecognitionScreen() {
         runAtTargetFps(frameProcessorFps, () => {
           'worklet';
 
+          const unboxed = BoxedInspireFace.unbox();
+          const isFront = cameraType === 'front';
+
+          let isMirrored = frame.isMirrored;
+          let orientation = frame.orientation;
+          let pixelFormat = frame.pixelFormat;
+          let widthFrame = frame.width;
+          let heightFrame = frame.height;
+
+          let rotDegress = getFrameRotationDegrees(frame);
+          let rotDegressCamera = toCameraRotation(rotDegress);
+          // 反向旋转来纠正图像
+          let rotationResized: string = rotDegress === 90 ? '270deg' : rotDegress === 180 ? '180deg' : rotDegress === 270 ? '90deg' : '0deg';
+          // 根据旋转角度调整宽高尺寸
+          let adjustedWidth = widthFrame;
+          let adjustedHeight = heightFrame;
+          if (rotDegress === 90 || rotDegress === 270) {
+            // 90度或270度旋转时，宽高需要调换
+            adjustedWidth = heightFrame;
+            adjustedHeight = widthFrame;
+          }
+          let pixelFormatResized = 'bgr'; // 'rgba'
+          console.log(`isFront=${isFront}, isMirrored=${isMirrored}, orientation=${orientation}, rotDegress=${rotDegress}, rotationResized=${rotationResized}, rotDegressCamera=${rotDegressCamera}, pixelFormat=${pixelFormat}, width=${widthFrame}, height=${heightFrame}, adjustedWidth=${adjustedWidth}, adjustedHeight=${adjustedHeight}`);
+          // 2. 调整图像，把图正过来
+          const resizedFrame = resize(frame, {
+            scale: {width: adjustedWidth, height: adjustedHeight},
+            rotation: rotationResized,
+            pixelFormat: pixelFormatResized,
+            dataType: 'uint8',
+            mirror: isFront,
+          });
+          const bufferFrame = resizedFrame.buffer;
+          const base64 = unboxed.toBase64(bufferFrame);
+          saveImage({
+            base64: base64,
+            width: widthFrame,
+            height: heightFrame,
+            format: pixelFormatResized,
+          });
+
           let bitmap: any = null;
           let imageStream: any = null;
-          const isFront = cameraType === 'front';
+
 
           try {
             // ✅ resize 只做缩放，不旋转不镜像（保证 SDK 识别稳定）
             const resized = resize(frame, {
-              scale: { width: SRC_W, height: SRC_H },
+              scale: {width: SRC_W, height: SRC_H},
               rotation: '0deg',
               pixelFormat: 'bgr',
               dataType: 'uint8',
@@ -622,19 +725,28 @@ export default function RealTimeRecognitionScreen() {
             const uprightW = upright.w;
             const uprightH = upright.h;
 
-            const unboxed = BoxedInspireFace.unbox();
-            if (!unboxed) {
-              reportFacesToJS({
-                faceCount: 0,
-                rotDeg,
-                mode: 0,
-                anchor: 0,
-                coordW: uprightW,
-                coordH: uprightH,
-                faces: [],
-                isFrontCamera: isFront
+
+            // 2. 抓拍逻辑
+            console.log("1shouldCapture.value=" + shouldCapture.value)
+            if (shouldCapture.value) {
+              shouldCapture.value = false;
+              console.log("2shouldCapture.value=" + shouldCapture.value)
+              const resized2 = resize(frame, {
+                scale: {width: SRC_W, height: SRC_H},
+                pixelFormat: 'bgr', // 建议 BGR，因为 InspireFace C++ 端对 BGR 支持最好
+                dataType: 'uint8',
               });
-              return;
+
+              if (resized2 && resized2.buffer) {
+                console.log("resized2=" + resized2.buffer.byteLength)
+                const base64 = unboxed.toBase64(resized2.buffer);
+                saveImage({
+                  base64: base64,
+                  width: SRC_W,
+                  height: SRC_H,
+                  format: 'bgr',
+                });
+              }
             }
 
             bitmap = unboxed.createImageBitmapFromBuffer(resized.buffer as ArrayBuffer, SRC_W, SRC_H, 3);
@@ -698,6 +810,7 @@ export default function RealTimeRecognitionScreen() {
                 trackId: facesAny.trackIds?.[i] ?? facesAny.ids?.[i],
               };
               if (!f?.rect || !f?.token) continue;
+              console.log("rect=" + JSON.stringify(f.rect))
 
               // 获取人脸关键点
               // val facePoints = unboxed.getFaceDenseLandmarkFromFaceToken(f.token)
@@ -793,7 +906,7 @@ export default function RealTimeRecognitionScreen() {
 
       }
     },
-    [resize, boxedSession, reportFacesToJS, cameraType, frameProcessorFps, confidenceThreshold]
+    [resize, boxedSession, reportFacesToJS, cameraType, frameProcessorFps, confidenceThreshold, saveImage, shouldCapture]
   );
 
   const toggleCamera = useCallback(() => {
@@ -847,9 +960,7 @@ export default function RealTimeRecognitionScreen() {
         style={StyleSheet.absoluteFill}
         device={device}
         isActive={isFocused && cameraInitialized && isCameraActive}
-        format={format}
         frameProcessor={frameProcessor}
-        frameProcessorFps={DLX_CONFIG.INSPIREFACE_FRAME_PROCESSOR_FPS}
         resizeMode={CURRENT_RESIZE_MODE} // 使用统一的 resizeMode
         zoom={0}
         // ✅ 镜像只在预览或画框二选一
@@ -864,7 +975,10 @@ export default function RealTimeRecognitionScreen() {
       <Canvas
         style={StyleSheet.absoluteFill}
         onSize={(size) => {
-          canvasSize.value = size;
+          // 确保这里的 size.height 是 Canvas 实际占用的物理像素高度
+          if (canvasSize.value.height !== size.height) {
+            canvasSize.value = size;
+          }
         }}
       >
         {boxes.map((b) => {
@@ -949,6 +1063,17 @@ export default function RealTimeRecognitionScreen() {
             <Text style={styles.buttonText}>停止</Text>
           </TouchableOpacity>
         )}
+        {/* 4. 增加拍照按钮 */}
+        <TouchableOpacity
+          style={[styles.button, {backgroundColor: 'gold'}]}
+          onPress={() => {
+            shouldCapture.value = true;
+          }}
+          disabled={isSaving}
+        >
+          <Text style={{color: 'black'}}>{isSaving ? '保存中...' : '抓拍'}</Text>
+        </TouchableOpacity>
+
       </View>
     </View>
   );
