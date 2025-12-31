@@ -1,0 +1,1381 @@
+<template>
+  <view>
+    <view>
+      <wrs-uts-face ref='arcFaceAppreciationView' :show-scrollbar="false"
+                    :style="'width:'+CameraWidth+'px;height:'+CameraHeight+'px;'"
+                    @onEvent="onEvent" :params="params">
+      </wrs-uts-face>
+      <view style="position: absolute;background-color: #FFFFFF;bottom: 0;"
+            :style="'width:'+CameraWidth+'px;height:'+ImgListHeight+'px;'">
+        <uni-row style="margin: 5px 5px;">
+          <uni-col
+              style="display: flex; justify-content: center; align-items: center; border: 1px solid #ccc; height: 100%; "
+              :span="7">
+            <image v-if="imagePath!=''" :src="imagePath" @click="showimgzy(imagePath)"
+                   :style="{'width':(ImgListHeight - 15)*9/16+'px','height':(ImgListHeight - 15) +'px'}"
+                   style="margin: auto;border-radius: 5rpx;"></image>
+            <text v-else>{{ txtWzd }}</text>
+          </uni-col>
+          <uni-col
+              style="margin-left: 6rpx; display: flex; justify-content: center; align-items: center; border: 1px solid #ccc; height: 100%;"
+              :span="16">
+            <text style="margin-bottom: 20rpx;" v-if="displayText != ''">
+              {{ displayText }}
+            </text>
+            <text style="margin-bottom: 20rpx;" v-if="VCNAMESTUDENT !=''">
+              学生：{{ VCNAMESTUDENT }} {{ txtQd }}
+            </text>
+
+            <text style="margin-bottom: 20rpx;">
+              {{ typetext }}
+            </text>
+            <!--
+            <text v-if="similar > 0" style="margin-bottom: 20rpx;">
+              相似度：{{ similar }}
+            </text>
+            -->
+          </uni-col>
+        </uni-row>
+
+      </view>
+      <view style="position: absolute; top: 20rpx;right: 20rpx;">
+        <view v-if="idtype == 3">
+          <view
+              style="padding: 14rpx 10rpx;border-radius: 14rpx;background-color: #FFFFFF;opacity:0.5;font-size: 24rpx;text-align: center;"
+              @click="gotoStudent(0)">
+            待反馈 : {{ qisum0 }}
+          </view>
+          <view
+              style="margin-top: 20rpx; padding: 14rpx 10rpx;border-radius: 14rpx;background-color: #FFFFFF;opacity:0.5;font-size: 24rpx;text-align: center;"
+              @click="gotoStudent(1)">
+            已反馈 : {{ qisum1 }}
+          </view>
+        </view>
+        <view v-else>
+          <view
+              style="padding: 14rpx 10rpx;border-radius: 14rpx;background-color: #FFFFFF;opacity:0.5;font-size: 24rpx;text-align: center;"
+              @click="gotoStudent(0)">
+            待{{ isqt == 1 ? '签退' : '签到' }} : {{ qisum0 }}
+          </view>
+          <view
+              style="margin-top: 20rpx; padding: 14rpx 10rpx;border-radius: 14rpx;background-color: #FFFFFF;opacity:0.5;font-size: 24rpx;text-align: center;"
+              @click="gotoStudent(1)">
+            已{{ isqt == 1 ? '签退' : '签到' }} : {{ qisum1 }}
+          </view>
+        </view>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script>
+import '../../common/xdlfun.js'
+// #ifdef APP-PLUS
+import {initDatabase, insertUser, queryByIdsSync} from "./db_utils.js"
+import {UTSFaceEngine} from "@/uni_modules/wrs-uts-face"
+
+import {UTSSqlite} from "@/uni_modules/wrs-uts-sqlite"
+import {getUserName} from "./name_utils";
+
+let sqlite = new UTSSqlite()
+// #endif
+export default {
+  data() {
+    var newParams = {};
+    newParams.businessArray = [{
+      business: "startCompare", // 对比业务
+      params: {
+        compare: true // true：开始对比，false：停止对比
+      }
+    }, {
+      business: "setDetectAttri",
+      params: {
+        rgbLiveness: false // 是否开启RGB活体检测
+      }
+    }]
+    let paramsStr = ''
+    console.log('相机参数0params=' + paramsStr);
+    return {
+      globalData: {
+        sqlite: sqlite,
+        threshold: 0.48, // 相似度阈值
+      },
+      // 防抖相关变量
+      isProcessingRecognize: false, // 是否正在处理识别结果
+      // 多人识别相关变量
+      processedUsers: {}, // 记录已处理的用户，避免重复处理
+      multiRecognitionEnabled: true, // 是否启用多人识别
+      recognitionInterval: 300, // 多人识别处理间隔（毫秒）
+      //识别过滤机制相关变量
+      recognitionWindow: {
+        maxTime: 800,//窗口采集时长
+        startTime: 0, // 窗口开始时间
+        faceIds: [], // 窗口内收集到的人脸ID数组
+        isWindowActive: false, // 窗口是否激活
+        timer: null // 定时器
+      },
+      params: paramsStr,
+      options: {
+        params: paramsStr
+      },
+      curImageSrc: null,//识别成功的当前照片
+      dataArray: [],
+      CameraWidth: 900, // 视频宽
+      CameraHeight: 1200, // 视频高
+      ImgListHeight: 380,
+      msg: "",
+      arcFaceMgr: '',
+      isSpeechWzd: 0,
+      similar: '',
+      VCNAMESTUDENT: '',
+      imagePathLocal: '',
+      // imagePath:'',
+      imagePath: '',
+      outDataStudent: {
+        data1: [{}],
+        data2: [{}]
+      }, // 学生信息
+      outDataTeacher: {
+        data1: [{}],
+        data2: [{}]
+      }, // 学生信息
+      outDataInfo: {
+        data1: [{}]
+      }, // 基础信息
+      idtype: 0, // 刷脸类型
+      vctype: '', // 托管类型
+      vcschool: '', // 学校
+      idsigntype: 0, // 托管类型id
+      idsigntypeold: 0, // 托管类型id
+      iddetail: 0, // 班级类型id
+      isqd: 0,
+      isqt: 0, // 是否签退
+      typetext: '', //
+      faceText: '',
+      isFront: false,
+      isCover: true,
+      txtQd: '',
+      txtWzd: '未找到',
+      QIFACEQUALITY: 70,
+      recognizedUsers: [], // 存储已识别的用户列表
+      displayText: '', // 合并显示的文本
+    }
+  },
+  onLoad(e) {
+    this.idtype = e.idtype
+    this.vctype = e.vctype
+    this.vcschool = e.vcschool
+    this.idsigntype = e.idsigntype
+    this.iddetail = e.iddetail
+    this.isqt = e.isqt
+    this.typetext = e.typetext
+
+    this.idsigntypeold = e.idsigntype
+
+
+    // 监控时间变化 签到签退 及午托晚托
+    if (this.idtype == 4) {
+      this.findInfo()
+    }
+
+    this.findStu()
+    this.findTeacher()
+
+    // 计算宽高
+    let _this = this
+    uni.getSystemInfo({
+      success(res) {
+        _this.CameraWidth = res.windowWidth
+        _this.CameraHeight = res.windowHeight
+        _this.ImgListHeight = res.windowHeight * 0.2 - 5
+      }
+    })
+
+    this.recognitionWindow.maxTime = uni.getStorageSync('FACE_QIFACEDISTANCE') || this.recognitionWindow.maxTime; // 防抖时间
+    this.isCover = uni.getStorageSync('FACE_ISCOVER'); // 采用前摄像头
+    console.log("isCover=" + this.isCover)
+
+    // 前后摄像头
+    this.isFront = uni.getStorageSync('FACE_ISFRONT'); // 采用前摄像头
+    console.log("isFront=" + this.isFront)
+    UTSFaceEngine.setCameraOrient(this.isFront)
+    //识别阈值
+    var recognizeThreshold = uni.getStorageSync('FACE_QIFACESCORE') || this.globalData.threshold;
+    if (uni.getStorageSync('FACE_QIFACESCORE')) {
+      recognizeThreshold = uni.getStorageSync('FACE_QIFACESCORE') / 100; // 一般识别大于0.8，就认为是同一个人
+    }
+    UTSFaceEngine.setSearchHubThreshold(parseFloat(recognizeThreshold));
+
+    //拍照质量
+    this.QIFACEQUALITY = uni.getStorageSync('FACE_QIFACEQUALITY') || 70
+
+    // 初始化
+    console.log('初始化 sqlite 数据库');
+    initDatabase(this.globalData.sqlite)
+    console.log('参数1params=', this.params);
+    var newParams = {};
+    newParams.businessArray = [{
+      business: "startCompare", // 对比业务
+      params: {
+        compare: true // true：开始对比，false：停止对比
+      }
+    }, {
+      business: "setScaleType",
+      params: {
+        scaleType: this.isCover ? 'FILL_CENTER' : 'FIT_CENTER'
+      }
+    }, {
+      business: "setDetectAttri",
+      params: {
+        rgbLiveness: false
+      }
+    }]
+
+    // if (!this.isFront) {
+    //   // 切换摄像头
+    //   newParams.businessArray.push({
+    //     business: "switchCamera"
+    //   })
+    // }
+    this.params = this.formatNewParams(newParams)
+    console.log('参数2params=', this.params);
+
+  },
+  computed: {
+    qisum0: function () {
+      if (this.isqt == 1) {
+        return this.outDataStudent.data1.filter((item) => {
+          return item.ISEND != 1
+        }).length
+      } else {
+        return this.outDataStudent.data1.filter((item) => {
+          return item.IDSTATUS == 0 || item.IDSTATUS == 3
+        }).length
+      }
+
+    },
+    qisum1: function () {
+      if (this.isqt == 1) {
+        return this.outDataStudent.data1.filter((item) => {
+          return item.ISEND == 1
+        }).length
+      } else {
+        return this.outDataStudent.data1.filter((item) => {
+          return item.IDSTATUS == 1
+        }).length
+      }
+    },
+  },
+  onReady() {
+    // this.checkStorageManagerPermission()
+  },
+  onUnload() {
+    // 释放资源
+    this.stopCamera();
+    let newParams = {}
+    newParams.businessArray = [{
+      business: "stopCamera"
+    },{
+      business: "releaseResource"
+    }]
+    let newParamsStr = this.formatNewParams(newParams)
+    // android、ios
+    this.params = newParamsStr
+    // 鸿蒙
+    this.options = {
+      params: newParamsStr
+    }
+    console.log("onUnload释放资源")
+  },
+  methods: {
+    stopCamera() {
+      let newParams = {}
+      newParams.businessArray = [{
+        business: "stopCamera"
+      }]
+      let newParamsStr = this.formatNewParams(newParams)
+      // android、ios
+      this.params = newParamsStr
+      // 鸿蒙
+      this.options = {
+        params: newParamsStr
+      }
+    },
+    /**
+     * 异步删除目录下所有文件
+     * @param {string} dirPath - 目录路径
+     * @returns {Promise<boolean>} - 是否删除成功
+     */
+    async deleteAllFilesInDir(dirPath, excludeFilePath) {
+      try {
+        console.log('开始清理目录:', dirPath, '排除文件:', excludeFilePath);
+
+        // 计算5分钟前的时间戳
+        const fiveMinutesAgo = new Date().getTime() - 5 * 60 * 1000;
+        console.log('删除5分钟前的文件，时间阈值:', new Date(fiveMinutesAgo).Format("yyyy-MM-dd HH:mm:ss"));
+
+        // 标准化路径
+        const normalizedDirPath = plus.io.convertLocalFileSystemURL(dirPath);
+        const normalizedExcludePath = excludeFilePath ? plus.io.convertLocalFileSystemURL(excludeFilePath) : null;
+
+        return new Promise((resolve) => {
+          plus.io.resolveLocalFileSystemURL(normalizedDirPath,
+              (dirEntry) => {
+                const directoryReader = dirEntry.createReader();
+                directoryReader.readEntries(
+                    (entries) => {
+                      let deleteCount = 0;
+                      let totalFiles = 0;
+                      let filesToDelete = 0;
+
+                      // 先统计需要删除的文件数量
+                      entries.forEach(entry => {
+                        if (entry.isFile) {
+                          totalFiles++;
+                        }
+                      });
+
+                      if (totalFiles === 0) {
+                        console.log('目录中没有文件');
+                        resolve(true);
+                        return;
+                      }
+
+                      console.log('找到', totalFiles, '个文件，开始检查时间...');
+
+                      // 遍历并检查文件时间
+                      entries.forEach(entry => {
+                        if (entry.isFile) {
+                          const filePath = plus.io.convertLocalFileSystemURL(normalizedDirPath + entry.name);
+
+                          // 获取文件的最后修改时间
+                          entry.getMetadata(
+                              (metadata) => {
+                                const fileModificationTime = metadata.modificationTime || metadata.lastModified;
+                                const isOlderThan5Minutes = fileModificationTime < fiveMinutesAgo;
+
+                                console.log('文件:', entry.name,
+                                    '修改时间:', new Date(fileModificationTime).Format("yyyy-MM-dd HH:mm:ss"),
+                                    '是否超过5分钟:', isOlderThan5Minutes);
+
+                                // 检查是否是排除文件
+                                if (normalizedExcludePath && filePath === normalizedExcludePath) {
+                                  console.log('跳过排除文件:', filePath);
+                                  deleteCount++;
+                                  if (deleteCount >= totalFiles) {
+                                    console.log('所有文件处理完成');
+                                    resolve(true);
+                                  }
+                                  return;
+                                }
+
+                                // 只删除超过5分钟的文件
+                                if (isOlderThan5Minutes) {
+                                  filesToDelete++;
+                                  console.log('准备删除文件（超过5分钟）:', filePath);
+
+                                  // 删除文件
+                                  entry.remove(
+                                      () => {
+                                        console.log('删除文件成功:', filePath);
+                                        deleteCount++;
+                                        if (deleteCount >= totalFiles) {
+                                          console.log('所有文件处理完成，共删除', filesToDelete, '个文件');
+                                          resolve(true);
+                                        }
+                                      },
+                                      (err) => {
+                                        console.error('删除文件失败:', filePath, err);
+                                        deleteCount++;
+                                        if (deleteCount >= totalFiles) {
+                                          console.error('文件处理完成（有失败），共删除', filesToDelete, '个文件');
+                                          resolve(true);
+                                        }
+                                      }
+                                  );
+                                } else {
+                                  console.log('跳过文件（未超过5分钟）:', filePath);
+                                  deleteCount++;
+                                  if (deleteCount >= totalFiles) {
+                                    console.log('所有文件处理完成，共删除', filesToDelete, '个文件');
+                                    resolve(true);
+                                  }
+                                }
+                              },
+                              (err) => {
+                                console.error('获取文件元数据失败:', filePath, err);
+                                // 如果无法获取元数据，跳过该文件
+                                deleteCount++;
+                                if (deleteCount >= totalFiles) {
+                                  console.log('所有文件处理完成，共删除', filesToDelete, '个文件');
+                                  resolve(true);
+                                }
+                              }
+                          );
+                        } else {
+                          // 如果是目录，直接计数完成
+                          deleteCount++;
+                          if (deleteCount >= totalFiles) {
+                            console.log('所有文件处理完成，共删除', filesToDelete, '个文件');
+                            resolve(true);
+                          }
+                        }
+                      });
+                    },
+                    (err) => {
+                      console.log('读取目录失败，可能目录不存在:', err);
+                      resolve(true); // 即使失败也继续
+                    }
+                );
+              },
+              (err) => {
+                console.log('目录不存在或无法访问:', err);
+                resolve(true); // 即使失败也继续
+              }
+          );
+        });
+
+      } catch (e) {
+        console.error('文件清理失败:', e);
+        return true; // 即使失败也返回true，避免影响主流程
+      }
+    },
+    getCurImage() {
+      var imageName = "sign_" + (new Date().Format("yyyyMMddHHmmss"))
+      let dirPath = plus.io.convertLocalFileSystemURL("_doc/");
+      let filePath = dirPath + imageName + ".jpg"
+      console.log("call getCurImage:" + filePath)
+      let newParams = {}
+      newParams.businessArray = [{
+        business: "getCurImage",
+        params: {
+          needBase64: false,
+          filePath: filePath
+        }
+      }]
+      let newParamsStr = this.formatNewParams(newParams)
+      // android、ios
+      this.params = newParamsStr
+      // 鸿蒙
+      this.options = {
+        params: newParamsStr
+      }
+      //删除_doc目录下的所有文件排除当前文件，不然太占用空间
+      setTimeout(() => {
+        this.deleteAllFilesInDir(dirPath, filePath)
+      }, 1)
+      return filePath
+    },
+    comparePerson(isCompare) {
+      let newParams = {}
+      newParams.businessArray = [{
+        business: "startCompare", // 对比业务
+        params: {
+          compare: isCompare // true：开始对比，false：停止对比
+        }
+      }, {
+        business: "setDetectAttri",
+        params: {
+          rgbLiveness: false
+        }
+      }]
+      let newParamsStr = this.formatNewParams(newParams)
+      // android、ios
+      this.params = newParamsStr
+      // 鸿蒙
+      this.options = {
+        params: newParamsStr
+      }
+    },
+    onEvent(e) {
+      // console.log("onEvent:" + JSON.stringify(e))
+      let that = this
+      let detail = e.detail
+      let opt = detail.opt
+      if (opt != "onDetectFace" && opt != "onRecognize" && opt != "onDetectFace") {
+        console.log("onEvent:" + JSON.stringify(e))
+      }
+      switch (opt) {
+          // 加载完视图
+        case "onLoadView": {
+
+        }
+          break;
+          // 获取当前图片的回调
+        case "getCurImage": {
+          let filePath = detail.filePath
+          if (filePath) {
+            //adb shell ls -la /storage/emulated/0/Android/data/uni.UNIA4698FF/apps/__UNI__A4698FF/www/pages/dlxface/_download/
+//adb pull /storage/emulated/0/Android/data/uni.UNIA4698FF/apps/__UNI__A4698FF/www/pages/dlxface/_download/20251227090952.jpg
+
+            // this.curImageSrc = "file://" + filePath
+            this.curImageSrc = plus.io.convertLocalFileSystemURL(filePath)
+            console.log("onEvent getCurImage:" + this.curImageSrc)
+          }
+        }
+          break;
+          // 注册回调
+        case "onRegister": {
+          let success = detail.success
+          let msg = ""
+          if (success) { // 注册成功
+            let filePath = detail.filePath
+            if (filePath) {
+              this.registerImageSrc = "file://" + filePath
+            }
+            let id = detail.id
+            // 随机生成一个用户名
+            let name = getUserName()
+            let user = {}
+            user.id = id
+            user.name = name
+            // 保存用户信息到数据库
+            insertUser([user], (resp) => {
+
+            })
+            msg = "注册成功:" + name
+          } else { // 注册失败
+            msg = "注册失败：" + JSON.stringify(detail)
+          }
+          console.log(msg)
+          this.showToast(msg)
+        }
+          break;
+          // 对比结果回调
+        case "onRecognize": {
+          console.log("onRecognize")
+          // 保存当前this引用
+          let that = this
+          that.handleRecognize(detail)
+        }
+          break;
+        default:
+          break;
+      }
+    },
+    async uploadImgFile(curImageSrc) {
+      let localFilePath = curImageSrc
+      console.log('上传文件uploadImgFile :' + localFilePath)
+      let _this = this;
+      let v_quality = _this.QIFACEQUALITY || 70
+
+      _this.appendToStorageArray('imgLocalArr', {
+        dt: Date.now(),
+        localImgPath: localFilePath
+      })
+
+      try {
+        // 图片压缩 - 使用Promise包装使其支持await
+        const resimg = await new Promise((resolve, reject) => {
+          uni.compressImage({
+            src: localFilePath,
+            width: v_quality + '%',
+            height: v_quality + '%',
+            quality: v_quality,
+            rotate: 0,//this.isFront == true ? 270 : 90,
+            success: resolve,
+            fail: reject
+          })
+        })
+
+        // 图片名称
+        let ossfilename = _this.getOssFileName('1.png')
+        // 图片路径
+        _this.imagePath = resimg.tempFilePath
+
+        _this.appendToStorageArray('imgLocalArr', {
+          dt: Date.now(),
+          localImgPath: _this.imagePath
+        })
+
+        // 上传图片 - 使用await等待上传完成
+        const res = await _this.ossfileUpload('image', resimg.tempFilePath, ossfilename, 1)
+
+        if (res.statusCode == 200) {
+          let ossfile = uni.getStorageSync('userInfoMain').VCURLUPFACE + ossfilename
+          console.log("ossfile=" + ossfile)
+          return ossfile // 返回ossfile
+        } else {
+          console.error("图片上传失败，状态码：" + res.statusCode)
+          return null
+        }
+      } catch (error) {
+        console.error("图片处理失败：" + error)
+        return null
+      }
+    },
+    //  用户签到
+    userSign(userObj) {
+      let _this = this;
+      let localFilePath = userObj.ossfile;
+      if(!localFilePath){
+        console.log("执行签到调用api,用户" + userObj.userId + ",ossfile为空=" + userObj.ossfile+",跳过执行")
+        return
+      }
+      if (userObj.role === 1) {
+        // 上传图片
+        console.log("执行签到调用api,用户" + userObj.userId + ",ossfile=" + localFilePath)
+        // 消息发送内容
+        let msgtitle = ''
+        let msgidtemplate = 2
+        let msgissendgzhmsg = 1
+        if (_this.idtype === 1) {
+          msgtitle = uni.getStorageSync('userInfoMain').VCNAME + '老师已在校门口接到' + userObj.name
+        }
+        if (_this.idtype === 2) {
+          msgtitle = '您的孩子已进入班级开始学习--' + uni.getStorageSync('userInfoMain').VCNAME + '老师'
+        }
+        if (_this.idtype === 3) {
+          msgissendgzhmsg = 0
+        }
+        // if(true){
+        //   return
+        // }
+
+        if (_this.idtype === 4) {
+          if (_this.isqt === 1) {
+            msgtitle = userObj.name +
+                '已从班级签退---' + uni.getStorageSync('userInfoMain').VCNAME +
+                '老师已在校门口接到' + '老师'
+          } else {
+            msgtitle = userObj.name +
+                '已进入托管班--' + uni.getStorageSync('userInfoMain').VCNAME +
+                '老师已在校门口接到' + '老师'
+          }
+        }
+
+        //  签到
+        let inObj = {
+          funcapi: 'szproctec',
+          procedure: 'st_con_student_post_face1',
+          i_idopr: uni.getStorageSync('userInfoMain').ID,
+          i_id: userObj.userId,
+          i_idtype: _this.idtype,
+          i_idcoursemain: _this.idsigntype,
+          i_idcoursedetail: _this.iddetail,
+          i_issign: 1,
+          i_vcimg: localFilePath,
+          i_vcdes: '',
+          g_idstudent: userObj.userId,
+          g_idtemplate: 2,
+          g_vctitle: msgtitle,
+          g_vcsm: '点击进入小程序查看详情',
+          g_issendgzhmsg: msgissendgzhmsg,
+        }
+        _this.apiFind({
+          inObj: inObj
+        })
+            .then((res1) => {
+              console.log("学生调用api签到参数=" +JSON.stringify(inObj))
+              console.log("学生调用api签到成功=" +JSON.stringify(res1))
+              // _this.outDataStudent.data1.forEach((item)=>{
+              // 	if(item.ID == aIDSTUDENT){
+              // 		item.IDSTATUS = 1
+              // 	}
+              // })
+            })
+
+        // 上传图片记录
+        var inObj2= {
+          funcapi: 'szproctec',
+              procedure: 'st_cou_student_face_rec_post',
+              i_idopr: uni.getStorageSync('userInfoMain').ID,
+              i_vcimgpath: localFilePath,
+              i_idstudent: userObj.userId,
+              i_vcnamestu: userObj.name,
+              i_qiscore: 80,
+              i_idstudentjs: 0,
+              i_vcnamestujs: '',
+              i_qiscorejs: '',
+              i_vcdescriptorjs: ''
+        }
+        _this.apiFind({
+          inObj: inObj2
+        }).then((res) => {
+          if (res.data1[0].o_issuc == '1') {
+            console.log("学生上传图片记录参数=" +JSON.stringify(inObj2))
+            console.log("学生上传图片记录成功=" + JSON.stringify(res))
+          } else {
+            console.log("学生上传图片记录参数=" +JSON.stringify(inObj2))
+            console.log("学生上传图片记录失败=" + JSON.stringify(res))
+          }
+        })
+      } else {
+        console.log("老师ossfile=" + localFilePath)
+        this.apiFind({
+          inObj: {
+            funcapi: 'szproctec',
+            procedure: 'st_cou_teacher_up_idstatus',
+            i_idopr: userObj.userId,
+            i_idteacher: userObj.userId,
+            i_idstatus: 1,
+            i_vcqdimg: localFilePath
+          }
+        }).then((res) => {
+          console.log("老师签到调用api签到成功=" + userObj.userId)
+          if (res.data1[0].o_issuc == '1') {
+            this.txtWzd = res.data1[0].o_msg
+            // 读语音
+            this.speechVcName('t' + userObj.userId);
+          } else {
+            this.imagePath = ''
+            this.txtWzd = res.data1[0].o_msg
+            this.$forceUpdate()
+          }
+        })
+
+      }
+    },
+    formatNewParams(newParams) {
+      let newParamsStr = JSON.stringify(newParams)
+      if (this.params === newParamsStr) {
+        return newParamsStr + " "
+      } else {
+        return newParamsStr
+      }
+    },
+
+    showToast: function (msg) {
+      uni.showToast({
+        title: msg,
+        duration: 2000
+      });
+    },
+    onLoadView: function () {
+      console.log("onLoadView");
+    },
+    requestPermission: function (permissions) {
+      plus.android.requestPermissions(
+          permissions,
+          function (resultObj) {
+            for (var i = 0; i < resultObj.granted.length; i++) {
+              var grantedPermission = resultObj.granted[i];
+              console.log('已获取的权限：' + grantedPermission);
+            }
+            for (var i = 0; i < resultObj.deniedPresent.length; i++) {
+              var deniedPresentPermission = resultObj.deniedPresent[i];
+              console.log('拒绝本次申请的权限：' + deniedPresentPermission);
+            }
+            for (var i = 0; i < resultObj.deniedAlways.length; i++) {
+              var deniedAlwaysPermission = resultObj.deniedAlways[i];
+              console.log('永久拒绝申请的权限：' + deniedAlwaysPermission);
+            }
+            // 若所需权限被永久拒绝,则打开APP设置界面,可以在APP设置界面打开相应权限
+            if (resultObj.deniedAlways.length > 0) {
+              // var Intent = plus.android.importClass("android.content.Intent");
+              // var Settings = plus.android.importClass("android.provider.Settings");
+              // var Uri = plus.android.importClass("android.net.Uri");
+              // var mainActivity = plus.android.runtimeMainActivity();
+              // var intent = new Intent();
+              // intent.setAction(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+              // var uri = Uri.fromParts("package", mainActivity.getPackageName(), null);
+              // intent.setData(uri);
+              // mainActivity.startActivity(intent);
+            }
+          },
+          function (error) {
+            console.log('申请权限错误：' + error.code + " = " + error.message);
+          });
+    },
+
+    // 重构：处理识别结果的主方法
+    handleRecognize(detail) {
+      console.log("处理识别结果");
+      console.log(detail);
+
+      // 检查是否正在处理中
+      if (this.isProcessingRecognize) {
+        console.log("当前正在处理识别结果，跳过本次调用");
+        return;
+      }
+
+      // 设置处理状态
+      this.isProcessingRecognize = true;
+      let that = this;
+
+      try {
+        let data = detail.data;
+        let dataObj = JSON.parse(data);
+        let faceList = dataObj.faceList || [];
+        let faceNum = faceList.length;
+
+        console.log(`检测到 ${faceNum} 个人脸`);
+
+        // 提取所有人脸ID
+        let faceIds = [];
+        if (faceNum > 0) {
+          for (let i = 0; i < faceNum; i++) {
+            let face = faceList[i];
+            let id = face.id;
+            faceIds.push(id);
+          }
+        }
+        // 处理识别结果
+        this.processRecognitionResult(faceIds);
+
+      } catch (error) {
+        console.error("处理识别结果出错:", error);
+      } finally {
+        // 处理完成，重置状态
+        that.isProcessingRecognize = false;
+      }
+    },
+
+    // 重构：处理识别结果的核心逻辑
+    processRecognitionResult(faceIds) {
+      const window = this.recognitionWindow;
+      const currentTime = Date.now();
+
+      // 如果窗口未激活，开始新的识别窗口
+      if (!window.isWindowActive) {
+        this.startRecognitionWindow();
+      }
+
+      // 在窗口时间内收集人脸ID
+      if (currentTime - window.startTime <= window.maxTime) {
+        // 去重并添加新人脸ID
+        faceIds.forEach(id => {
+          if (!window.faceIds.includes(id)) {
+            window.faceIds.push(id);
+            console.log(`添加人脸ID: ${id} 到识别窗口`);
+          }
+        });
+
+        console.log(`当前窗口内收集到的人脸数: ${window.faceIds.length}, 人脸ID: ${window.faceIds.join(', ')}`);
+      } else {
+        // 窗口时间结束，进行最终判断
+        this.finalizeRecognition();
+      }
+    },
+
+    // 重构：开始识别窗口
+    startRecognitionWindow() {
+      const window = this.recognitionWindow;
+      console.log("window.maxTime=" + window.maxTime)
+      // 清除之前的定时器
+      if (window.timer) {
+        clearTimeout(window.timer);
+      }
+
+      // 初始化窗口数据
+      window.startTime = Date.now();
+      window.faceIds = [];
+      window.isWindowActive = true;
+
+      console.log("开始新的识别窗口");
+
+      // 设置窗口时间后结束窗口
+      window.timer = setTimeout(() => {
+        this.finalizeRecognition();
+      }, window.maxTime);
+    },
+
+    // 重构：最终识别判断
+    finalizeRecognition() {
+      const window = this.recognitionWindow;
+      window.isWindowActive = false;
+
+      console.log(`识别窗口结束 - 收集到的人脸数: ${window.faceIds.length}, 人脸ID: ${window.faceIds.join(', ')}`);
+
+      // 过滤掉无效的人脸ID（小于0表示无效人脸，大于0表示有效人脸）
+      const totalFaceNum = window.faceIds.length
+      const invalidFaceIds = window.faceIds.filter(id => id < 0);
+      const validFaceIds = window.faceIds.filter(id => id > 0);
+      const validFaceCount = validFaceIds.length;
+      if (totalFaceNum === 0) {
+        // 没有识别到任何人脸，清屏并播报未识别语音
+        console.log(`识别窗口结束 - 没有识别到任何人脸`);
+        this.clearScreen();
+        // 重置窗口
+        this.resetRecognitionWindow();
+        return;
+      }
+      if (invalidFaceIds.length === totalFaceNum) {
+        // 所有识别结果都无效，清屏并播报未识别语音
+        console.log(`识别窗口结束 - 收集到的全是无效人脸数: ${invalidFaceIds.length}, 无效人脸ID: ${invalidFaceIds.join(', ')}`);
+        this.clearScreen();
+        this.txtWzd = '未找到'
+        this.speechVcName(0); // 播报未识别语音
+        // 重置窗口
+        this.resetRecognitionWindow();
+      }
+      // 有效人脸数大于0
+      if (validFaceCount > 0) {
+        // 执行拍照和按人执行签到
+        console.log(`识别到 ${validFaceIds.length} 个已注册人员，执行拍照和签到`);
+        this.processRegisteredFaces(validFaceIds);
+      }
+      // 重置窗口
+      this.resetRecognitionWindow();
+    },
+
+    // 重构：处理已注册人员
+    async processRegisteredFaces(registeredFaceIds) {
+      if (registeredFaceIds.length === 0) return;
+
+      // 去重处理
+      const uniqueFaceIds = [...new Set(registeredFaceIds)];
+
+      console.log(`处理 ${uniqueFaceIds.length} 个已注册人员:`, uniqueFaceIds);
+
+      // 处理第一个已注册人员（可根据需求扩展为处理多个）
+      var users = queryByIdsSync([uniqueFaceIds]) || [];
+      if(users.length ==0){
+        console.error("数据库中无用户信息，userIds=" + uniqueFaceIds.join(','))
+        this.showToast("数据库中无用户信息，userIds=" + uniqueFaceIds.join(',')+"，因数据不同步，请重新载入照片操作")
+        return;
+      }
+      console.log("识别到的本地用户users=" + JSON.stringify(users))
+      var teacherIduserList = users.filter((item) => {
+        return item.role == 2
+      }).map((e) => e.userId)
+      var studentIduserList = users.filter((item) => {
+        return item.role == 1
+      }).map((e) => e.userId)
+      console.log("识别到的本地用户studentIduserList=" + studentIduserList.join(','))
+      // 执行拍照，多个人共用一张照片
+      var isWaitSign = false;
+      if (teacherIduserList.length > 0) {
+        // 有教师执行拍照
+        isWaitSign = true;
+      } else if (studentIduserList.length > 0) {
+        // 有学生执行拍照
+        isWaitSign = this.isWaitSignUser(studentIduserList)
+      }
+      if (isWaitSign) {
+        console.log('在带签到人员列表中，执行拍照');
+        let filePath = this.getCurImage();
+        // 使用异步方式等待拍照完成（替代死循环）
+        console.log('开始等待拍照完成，得到照片路径');
+        await this.waitForCurImageSrc();
+        console.log('完成等待拍照完成，得到照片路径=' + this.curImageSrc);
+        let userCurImageSrc = this.curImageSrc;
+        var ossfile = null;
+        if (userCurImageSrc) {
+          ossfile = await this.uploadImgFile(userCurImageSrc);
+        }
+        this.curImageSrc = null;// 重置照片路径
+        for (let dbUser of users) {
+          // 添加用户签到照片oss路径
+          dbUser.ossfile = ossfile;
+        }
+
+      }else{
+        console.log("isWaitSign=false, 不执行拍照")
+      }
+      // 执行签到逻辑
+      await this.onRecognized(users);
+
+    },
+    // 新增：等待curImageSrc被赋值的异步方法
+    waitForCurImageSrc() {
+      return new Promise((resolve) => {
+        const checkImageSrc = () => {
+          if (this.curImageSrc && this.curImageSrc !== '') {
+            resolve();
+          } else {
+            // 非阻塞延迟后再次检查
+            setTimeout(checkImageSrc, 10);
+          }
+        };
+        checkImageSrc();
+      });
+    },
+    // 重构：重置识别窗口
+    resetRecognitionWindow() {
+      const window = this.recognitionWindow;
+      window.startTime = 0;
+      window.faceIds = [];
+      window.isWindowActive = false;
+      if (window.timer) {
+        clearTimeout(window.timer);
+        window.timer = null;
+      }
+    },
+
+    // 保留原有的清屏方法
+    clearScreen() {
+      console.log("执行清屏操作");
+      // 清空页面显示
+      this.VCNAMESTUDENT = '';
+      this.displayText = '';
+      this.imagePathLocal = '';
+      this.imagePath = '';
+      this.isSpeechWzd = 0;
+      this.similar = 0;
+      this.txtWzd = '';
+      this.$forceUpdate();
+    },
+
+    // 识别成功处理签到逻辑
+    onRecognized: async function (users) {
+      var that = this;
+      console.log('识别成功处理签到逻辑');
+
+      // 统一处理：支持传入单个用户或用户数组
+      const userList = Array.isArray(users) ? users : [users];
+
+      console.log('处理用户列表:', JSON.stringify(userList));
+
+      // 清空之前的识别结果
+      this.recognizedUsers = [];
+      this.displayText = '';
+
+      // 处理每个用户
+      for (let user of userList) {
+        if (user) {
+          this.recognizedUsers.push(user);
+          // 处理签到逻辑
+          if (user.role == 2) {
+            // 教师逻辑
+            await this.userSign(user);
+          } else {
+            // 学生逻辑
+            await this.processStudent(user);
+          }
+        }
+      }
+
+      // 生成合并显示文本
+      this.generateDisplayText();
+
+      // 更新界面
+      this.$forceUpdate();
+    },
+    // 处理学生
+    async processStudent(user) {
+      // 判断签到状态
+      let statusInfo = this.getStudentStatus(user);
+      this.imagePath = statusInfo.imagePath
+      // 根据状态处理业务逻辑
+      if (statusInfo.status === 'not_in_list') {
+        // 不在列表中
+        this.speechVcName(user.userId);
+      } else if (statusInfo.status === 'already_signout') {
+        // 已签退
+        this.speechVcName(user.userId);
+      } else if (statusInfo.status === 'already_signed') {
+        // 已签到
+        this.speechVcName(user.userId);
+        this.userSign(user);
+      } else if (statusInfo.status === 'need_sign') {
+        // 需要签到
+        this.speechVcName(user.userId);
+        this.userSign(user);
+      } else if (statusInfo.status === 'need_signout' && this.isqt == 1) {
+        // 需要签退
+        this.speechVcName(user.userId);
+        this.userSign(user);
+      }
+    },
+
+    // 获取学生状态
+    getStudentStatus(user) {
+      let status = 'not_in_list'; // 默认不在列表中
+      let statusText = '未报当前班';
+      let imagePath = '';
+
+      const student = this.outDataStudent.data1.find(item => item.ID == user.userId);
+      console.log(`获取学生状态,用户信息=${JSON.stringify(user)}`)
+      console.log(`获取学生状态,学生信息=${JSON.stringify(student)}`)
+      console.log("this.outDataStudent.data1=",JSON.stringify(this.outDataStudent.data1))
+      if (student) {
+        if (this.isqt == 1) {
+          // 签退逻辑
+          if (student.ISEND == '1') {
+            status = 'already_signout';
+            statusText = '已签退';
+            student.lastSignImgOssFile = student.lastSignImgOssFile || user.imgPath;
+            this.imagePath = user.lastSignImgOssFile || '';
+          } else {
+            status = 'need_signout';
+            statusText = '签退';
+            student.ISEND = 1;
+            if (user.ossfile) {
+              student.lastSignImgOssFile = user.ossfile;
+              imagePath = student.lastSignImgOssFile || '';
+            }
+          }
+        } else {
+          // 签到逻辑
+          if (student.IDSTATUS == '1') {
+            status = 'already_signed';
+            statusText = '已签到';
+            student.lastSignImgOssFile = student.lastSignImgOssFile || user.imgPath;
+            imagePath = student.lastSignImgOssFile || '';
+          } else {
+            status = 'need_sign';
+            statusText = '已找到';
+            student.IDSTATUS = 1;
+            if (user.ossfile) {
+              student.lastSignImgOssFile = user.ossfile;
+              imagePath = student.lastSignImgOssFile || '';
+            }
+          }
+        }
+      }
+      return {status, statusText, imagePath};
+    },
+
+    // 生成合并显示文本
+    generateDisplayText() {
+      if (this.recognizedUsers.length === 0) {
+        this.displayText = '';
+        return;
+      }
+
+      const teachers = this.recognizedUsers.filter(user => user.role == 2);
+      const students = this.recognizedUsers.filter(user => user.role == 1);
+
+      let displayParts = [];
+
+      // 添加教师信息
+      if (teachers.length > 0) {
+        const teacherNames = teachers.map(t => t.name).join('、');
+        displayParts.push(`教师：${teacherNames}`);
+      }
+
+      // 添加学生信息
+      if (students.length > 0) {
+        const studentInfos = students.map(student => {
+          const statusInfo = this.getStudentStatus(student);
+          return `${student.name}(${statusInfo.statusText})`;
+        }).join('、');
+
+        displayParts.push(`学生：${studentInfos}`);
+      }
+
+      this.displayText = displayParts.join(' | ');
+      console.log('合并显示文本:', this.displayText);
+      this.txtWzd = ''
+    },
+
+    isWaitSignUser(userIdList) {
+      console.log("执行判断用户是否在等待签到=" + JSON.stringify(userIdList))
+      this.outDataStudent.data1 = this.outDataStudent.data1 || []
+      if (this.outDataStudent.data1.length == 0) {
+        return false
+      }
+      // 检查idList中是否存在任何一个userIdList中的用户ID
+      if (this.isqt == 1) {
+        // 签退逻辑：ISEND != 1
+        let idList = this.outDataStudent.data1.filter((item) => {
+          return item.ISEND != 1
+        }).map((e) => e.ID)
+        console.log("执行判断用户是否在等待签到2=" + JSON.stringify(userIdList))
+        // 检查idList中是否存在userIdList中的任何一个ID
+        return userIdList.some(userId => idList.includes(userId))
+      } else {
+        // 签到逻辑：IDSTATUS == 0 || IDSTATUS == 3
+        let idList = this.outDataStudent.data1.filter((item) => {
+          return (item.IDSTATUS == 0 || item.IDSTATUS == 3)
+        }).map((e) => e.ID)
+        console.log("执行判断用户是否在等待签到3=" + JSON.stringify(userIdList))
+        // 检查idList中是否存在userIdList中的任何一个ID
+        return userIdList.some(userId => idList.includes(userId))
+      }
+    },
+    // 学生列表
+    findStu() {
+      this.apiFind({
+        inObj: {
+          funcapi: 'szproctec',
+          procedure: 'st_cou_course_student_up_se_sum',
+          i_idopr: uni.getStorageSync('userInfoMain').ID,
+          i_idcampus: uni.getStorageSync('selCampus').ID,
+          i_idtype: this.idtype,
+          i_iddetail: this.iddetail,
+          i_vctype: this.vctype,
+          i_vcschool: this.vcschool
+        },
+        outObj: 'outDataStudent'
+      })
+          .then((res) => {
+            //{"data1":[{"ID":"12","IDSTATUS":"1","ISEND":"0"},{"ID":"5","IDSTATUS":"0","ISEND":"0"},{"ID":"12","IDSTATUS":"0","ISEND":"0"}],"data2":[{}]
+            console.log("-------------findStu----------res-------" + JSON.stringify(res))
+            //为去重后赋值
+            const uniqueData = Array.from(new Map(res.data1.map(item => [item.ID, item])).values());
+            this.outDataStudent.data1 = uniqueData;
+          })
+    },
+
+    // 学生列表
+    findTeacher() {
+      this.apiFind({
+        inObj: {
+          funcapi: 'szproctec',
+          procedure: 'st_cou_teacher_up_se_detail2',
+          i_idopr: uni.getStorageSync('userInfoMain').ID,
+          i_idcampus: uni.getStorageSync('selCampus').ID
+        },
+        outObj: 'outDataTeacher'
+      })
+          .then(res => {
+            console.log("------------------findTeacher-------------res-------------" + JSON.stringify(res))
+            //{"data1":[{"ID":"3","VCNAME":"数智乙","IDTUP":null,"IDT":null,"VCEMPIN":null,"IDSTATUS":"0","IDSTATUS1":"0","IDTYPEQJ":null,"DTDATE":null,"DTQDY":null,"DTQD":null,"VCIMGQD":null,"VCAREAQD":null,"VCQDTIME":null,"DTQTY":null,"VCIMGQT":null,"VCAREAQT":null,"VCQTTIME":null,"DTQDY1":null,"DTQD1":null,"VCIMGQD1":null,"VCAREAQD1":null,"VCQDTIME1":null,"DTQTY1":null,"DTQT1":"","VCIMGQT1":null,"VCAREAQT1":null,"VCQTTIME1":null},{"ID":"5","VCNAME":"李西安 152 分身","IDTUP":"23","IDT":"5","VCEMPIN":"李西安 152 分身","IDSTATUS":"1","IDSTATUS1":"0","IDTYPEQJ":null,"DTDATE":"2025-12-29","DTQDY":"00:00:00","DTQD":"2025-12-29 11:51:15","VCIMGQD":null,"VCAREAQD":null,"VCQDTIME":"11:51:15","DTQTY":"00:00:00","VCIMGQT":null,"VCAREAQT":null,"VCQTTIME":null,"DTQDY1":"00:00:00","DTQD1":null,"VCIMGQD1":null,"VCAREAQD1":null,"VCQDTIME1":null,"DTQTY1":"00:00:00","DTQT1":"2025-12-29 11:51:40","VCIMGQT1":null,"VCAREAQT1":null,"VCQTTIME1":"11:51:40"},{"ID":"2","VCNAME":"数智老师","IDTUP":null,"IDT":null,"VCEMPIN":null,"IDSTATUS":"0","IDSTATUS1":"0","IDTYPEQJ":null,"DTDATE":null,"DTQDY":null,"DTQD":null,"VCIMGQD":null,"VCAREAQD":null,"VCQDTIME":null,"DTQTY":null,"VCIMGQT":null,"VCAREAQT":null,"VCQTTIME":null,"DTQDY1":null,"DTQD1":null,"VCIMGQD1":null,"VCAREAQD1":null,"VCQDTIME1":null,"DTQTY1":null,"DTQT1":"","VCIMGQT1":null,"VCAREAQT1":null,"VCQTTIME1":null}],"data2":[{}]}
+          }).catch(() => {
+
+      });
+    },
+
+    // 学生明细
+    gotoStudent(aidstatus) {
+      uni.navigateTo({
+        url: '/pages/class/takeFaceStudent?idtype=' + this.idtype +
+            '&vctype=' + this.vctype +
+            '&vcschool=' + this.vcschool +
+            '&idsigntype=' + this.idsigntype +
+            '&iddetail=' + this.iddetail +
+            '&isqt=' + this.isqt +
+            '&typetext=' + this.typetext +
+            '&idstatus=' + aidstatus
+      });
+    },
+
+    // 播放语音
+    speechVcName(aID) {
+      let vcurlvoc = ''
+      if (aID != 0) {
+        vcurlvoc = 'https://dlx-face.oss-cn-shanghai.aliyuncs.com/' + uni.getStorageSync('userInfoMain')
+            .IDORG + '/vocname/' + aID + '.mp3'
+      } else {
+        vcurlvoc = '/static/wzd.mp3'
+      }
+
+      // // 全局一次（建议在 App 启动或页面 onLoad）
+      // uni.setInnerAudioOption({
+      // 	obeyMuteSwitch: false, // iOS 静音键下也出声
+      // 	mixWithOther: true, // 允许与其它音频混音
+      // 	speakerOn: true // 安卓优先外放
+      // });
+
+      const innerAudioContext = uni.createInnerAudioContext();
+      //   是否自动开始播放
+      innerAudioContext.autoplay = true;
+      // 设置音频播放模式
+      // "ambient" - 不中止其他声音播放，不能后台播放，静音后无声音
+      // "soloAmbient" - 中止其他声音播放，不能后台播放，静音后无声音
+      // "playback" - 中止其他声音，可以后台播放，静音后有声音。 默认值为"playback"。
+      innerAudioContext.sessionCategory = 'playback';
+      innerAudioContext.volume = 1;
+      innerAudioContext.src = vcurlvoc;
+      innerAudioContext.onPlay(() => {
+        // console.log('开始播放');
+      });
+      innerAudioContext.onError((res) => {
+        innerAudioContext.destroy(); // 释放内部音频上下文对象
+        // console.log(res.errMsg);
+        // console.log(res.errCode);
+      });
+      innerAudioContext.onEnded(function () {
+        innerAudioContext.destroy(); // 释放内部音频上下文对象
+      });
+    },
+
+    // 显示照片
+    showimgzy(url) {
+      var imglists = []
+      imglists[0] = url
+      if (this.imagePathLocal != '') {
+        imglists[1] = this.imagePathLocal
+      }
+      // console.log(imglists)
+      uni.previewImage({
+        urls: imglists,
+        current: 0
+      })
+    },
+
+    // 初始化
+    findInfo() {
+      this.apiFind({
+        inObj: {
+          funcapi: 'szproctec',
+          procedure: 'st_pfm_config_face_se_init',
+          i_idopr: uni.getStorageSync('userInfoMain').ID
+        },
+        outObj: 'outDataInfo'
+      })
+          .then((res) => {
+            this.setCurCoursetype()
+          })
+    },
+    setCurCoursetype() {
+      let c_date = new Date()
+
+      let c_hm = ((c_date.getHours() + 100) + '').substr(1, 2) + ':' + ((c_date.getMinutes() + 100) + '').substr(
+          1, 2)
+      let v_idsigntype = 0
+      let v_vcname = ''
+
+      let qdList = this.outDataInfo.data2.filter((item) => {
+        return item.ISQD == '1' && c_hm >= item.DTQDS && c_hm <= item.DTQDE
+      })
+      if (qdList && qdList.length == 1) {
+        this.isqd = 1
+        v_idsigntype = qdList[0].ID
+        this.idsigntype = qdList[0].ID
+        v_vcname = qdList[0].VCNAME
+      } else {
+        this.isqd = 0
+      }
+
+      let qtList = this.outDataInfo.data2.filter((item) => {
+        return item.ISQT == '1' && c_hm >= item.DTQTS && c_hm <= item.DTQTE
+      })
+      if (qtList && qtList.length == 1) {
+        this.isqt = 1
+        v_idsigntype = '100' + qtList[0].ID
+        this.idsigntype = qtList[0].ID
+        v_vcname = qtList[0].VCNAME
+      } else {
+        this.isqt = 0
+      }
+
+      if (v_idsigntype == 0) {
+        this.typetext = '托管刷脸：未在刷脸时间段1'
+        this.faceText = '未在刷脸时间段'
+        this.$forceUpdate()
+      }
+
+      // 签到时间段有跳转
+      if (this.idsigntypeold != v_idsigntype) {
+        this.findStu()
+        if (v_idsigntype == 0) {
+          this.typetext = '托管刷脸：未在刷脸时间段2'
+          this.faceText = '未在刷脸时间段'
+          this.$forceUpdate()
+        } else {
+          this.typetext = '托管刷脸：' + v_vcname + ((this.isqt == 1) ? '签退' : '签到')
+          this.faceText = v_vcname + ((this.isqt == 1) ? '签退' : '签到')
+          this.$forceUpdate()
+        }
+        // 已识别的记录 清空，可以再次识别
+        // this.stuIDList = []
+        this.idsigntypeold = v_idsigntype
+      }
+
+      // 卡住时间会 推后， 造成初始的时候，有等待执行的情况
+      setTimeout(() => {
+        this.setCurCoursetype()
+      }, 60000);
+    },
+
+  }
+}
+</script>
+
+<style>
+.xiangji-button {
+  position: absolute;
+  /* bottom: 120rpx; */
+  top: 0;
+  left: 20rpx;
+  border: 1px solid #5e5e5e;
+  padding: 30rpx;
+  background-color: #acacac;
+  border-radius: 100rpx;
+  opacity: 0.3;
+  z-index: 10;
+}
+</style>

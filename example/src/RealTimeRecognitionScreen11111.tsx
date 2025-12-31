@@ -8,7 +8,7 @@ import {
   Text,
   TouchableOpacity,
   View,
-  useWindowDimensions, Image, Pressable, Modal,
+  useWindowDimensions,
 } from 'react-native';
 import {useFocusEffect, useIsFocused} from '@react-navigation/native';
 
@@ -54,7 +54,6 @@ import {type RegisteredFacesDTO, type FaceBoxBuf, type FaceBoxUI} from './dto/Dl
 import {DLX_CONFIG, STORAGE_KEYS, userInfoCacheStorage} from './comm/GlobalStorage';
 import {log} from './comm/logger';
 import {queryUserByFaceId} from "./comm/FaceDB";
-import {fetchAllAndProcessCourseType} from './comm/BizApi';
 
 import RNFS from 'react-native-fs';
 
@@ -202,9 +201,9 @@ function pickBestFormat(device: any) {
 export default function RealTimeRecognitionScreen() {
   const { width: screenW, height: screenH } = useWindowDimensions();
   // 80% 给 cameraView，20% 给 showView
-  const cameraH = Math.floor(screenH * 0.7);
+  const cameraH = Math.round(screenH * 0.8);
   // cameraView 宽度用屏幕实际宽度（不写 100%）
-  const cameraW = Math.floor(screenW);
+  const cameraW = Math.round(screenW);
   const showH = Math.max(0, screenH - cameraH);
 
   const [cameraType, setCameraType] = useState<'front' | 'back'>('front');
@@ -219,7 +218,7 @@ export default function RealTimeRecognitionScreen() {
   const [boxes, setBoxes] = useState<FaceBoxUI[]>([]);
   const [isCameraActive, setIsCameraActive] = useState(false);
 
-  const canvasSize = useSharedValue({width: cameraW, height: cameraH});
+  const canvasSize = useSharedValue({ width: cameraW, height: cameraH });
   const font = useFont(require('./assets/fonts/PingFangSC-Regular.ttf'), 18);
 
   const [cameraInitialized, setCameraInitialized] = useState(false);
@@ -239,37 +238,11 @@ export default function RealTimeRecognitionScreen() {
     frame: `0x0`,
   });
 
-  // 添加课程人数统计状态
-  const [qisum0, setQisum0] = useState(0); // 未签到人数
-  const [qisum1, setQisum1] = useState(0); // 已签到人数
-// 获取课程信息和人数统计
-  useEffect(() => {
-    const loadCourseData = async () => {
-      try {
-        const result = await fetchAllAndProcessCourseType(4,'','','');
-        if (result) {
-          // 计算qisum0（未签到人数）和qisum1（已签到人数）
-          const totalStudents = result.stuData?.length || 0;
-          const checkedInStudents = result.teacherData?.filter(student =>
-            student.qdzt === '1' || student.qdzt === 1
-          ).length || 0;
-
-          setQisum0(totalStudents - checkedInStudents); // 未签到人数
-          setQisum1(checkedInStudents); // 已签到人数
-        }
-      } catch (error) {
-        console.error('获取课程数据失败:', error);
-      }
-    };
-
-    loadCourseData();
-  }, []);
   // Session 单例
   const sessionRef = useRef<any>(null);
 
   // JS 平滑
   const smoothRef = useRef(new Map<number, FaceBoxUI>());
-  const [isSmoothingEnabled, setIsSmoothingEnabled] = useState(false);
 
   // 权限
   useFocusEffect(
@@ -391,8 +364,8 @@ export default function RealTimeRecognitionScreen() {
         if (now - lastReportTime < 66) return;
         lastReportTime = now;
 
-        const vw = canvasSize.value?.width || cameraW;
-        const vh = canvasSize.value?.height || cameraH;
+        const vw = canvasSize.value?.width || PREVIEW_W;
+        const vh = canvasSize.value?.height || PREVIEW_H;
 
         setDebug({
           faceCount: payload.faceCount,
@@ -408,18 +381,19 @@ export default function RealTimeRecognitionScreen() {
         const alpha = 0.75;
 
         const next: FaceBoxUI[] = payload.faces.map((b) => {
-          const sx = payload.frameW / payload.coordW;
-          const sy = payload.frameH / payload.coordH;
-          const bFrame = { x: b.x * sx, y: b.y * sy, width: b.width * sx, height: b.height * sy };
+          const mapped = mapRectToView(
+            { x: b.x, y: b.y, width: b.width, height: b.height },
+            payload.coordW,
+            payload.coordH,
+            vw,
+            vh,
+            CURRENT_RESIZE_MODE
+          );
 
-          const mapped = mapRectToView(bFrame, payload.frameW, payload.frameH, vw, vh, CURRENT_RESIZE_MODE);
+          const id = b.trackId ?? 0;
+          const prev = smoothRef.current.get(id);
 
-          const id = b.trackId ?? -1;
-
-          // --- 修正逻辑：只有 id != -1 时才尝试获取上一次的状态进行平滑 ---
-          const prev = (id !== -1) ? smoothRef.current.get(id) : null;
-
-          const smoothed = (isSmoothingEnabled && prev)
+          const smoothed = prev
             ? {
               x: prev.x + (mapped.x - prev.x) * alpha,
               y: prev.y + (mapped.y - prev.y) * alpha,
@@ -437,19 +411,18 @@ export default function RealTimeRecognitionScreen() {
           };
 
           if (b.isMatched) {
-            const user = queryUserByFaceId(Number(b.hubId));
-            if (user) ui.name = user.name || '未注册';
+            b.hubId = Number(b.hubId);
+            const user = queryUserByFaceId(b.hubId);
+            if (user) {
+              ui.name = user.name || '未注册';
+            }
           }
 
-          // 只有有效的 id 才存入 smoothRef
-          if (id !== -1) {
-            smoothRef.current.set(id, ui);
-          }
+          smoothRef.current.set(id, ui);
           return ui;
         });
 
-        // 清理已消失的 ID
-        const aliveIds = new Set(next.map((n) => n.id).filter(i => i !== -1));
+        const aliveIds = new Set(next.map((n) => n.id));
         smoothRef.current.forEach((_, key) => {
           if (!aliveIds.has(key)) smoothRef.current.delete(key);
         });
@@ -457,65 +430,78 @@ export default function RealTimeRecognitionScreen() {
         setBoxes(next);
       }
     );
-  }, [canvasSize, isSmoothingEnabled, cameraW, cameraH]);
+  }, [canvasSize, format]);
 
   // 1. 增加拍照状态
   const shouldCapture = useMemo(() => Worklets.createSharedValue(false), []); // Worklets-core 方式
   const [isSaving, setIsSaving] = useState(false);
-// 存储最后一次抓拍的信息
-  const [lastCapture, setLastCapture] = useState<{uri: string | null, name: string}>({
-    uri: null,
-    name: ''
-  });
-  const [isModalVisible, setIsModalVisible] = useState(false);
 
   const saveImage = useMemo(
     () =>
       Worklets.createRunOnJS(
         async (payload: { base64: string; width: number; height: number; format: 'bgr' | 'rgba' }) => {
+          console.log('--- JS线程: saveImage 开始处理 ---');
           setIsSaving(true);
+
           try {
             const { base64, width, height, format } = payload;
+
+            // 1) base64 -> ArrayBuffer -> Uint8Array
+            console.log('base64.len=', base64?.length);
             const unboxed = BoxedInspireFace.unbox();
             const buffer: ArrayBuffer = unboxed.fromBase64(base64);
             const srcPixels = new Uint8Array(buffer);
 
-            // ... (之前的 RGBA 转换逻辑保持不变)
-            let rgbaPixels = new Uint8Array(width * height * 4);
-            if (format === 'bgr') {
-              for (let i = 0; i < width * height; i++) {
-                const srcIdx = i * 3; const dstIdx = i * 4;
-                rgbaPixels[dstIdx + 0] = srcPixels[srcIdx + 2];
-                rgbaPixels[dstIdx + 1] = srcPixels[srcIdx + 1];
-                rgbaPixels[dstIdx + 2] = srcPixels[srcIdx + 0];
-                rgbaPixels[dstIdx + 3] = 255;
-              }
-            } else { rgbaPixels = srcPixels; }
+            const expectedLen = format === 'bgr' ? width * height * 3 : width * height * 4;
+            console.log(`JS线程: 尺寸 ${width}x${height}, format=${format}, 数据长度: ${srcPixels.length}, expected=${expectedLen}`);
 
-            const imageInfo = { width, height, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Opaque };
+            if (srcPixels.length < expectedLen) {
+              throw new Error(`像素长度不匹配：got=${srcPixels.length}, expected=${expectedLen}`);
+            }
+
+            let rgbaPixels: Uint8Array;
+
+            // 2) 转 RGBA
+            if (format === 'bgr') {
+              rgbaPixels = new Uint8Array(width * height * 4);
+              // BGR(3) -> RGBA(4)
+              for (let i = 0; i < width * height; i++) {
+                const srcIdx = i * 3;
+                const dstIdx = i * 4;
+                rgbaPixels[dstIdx + 0] = srcPixels[srcIdx + 2]; // R
+                rgbaPixels[dstIdx + 1] = srcPixels[srcIdx + 1]; // G
+                rgbaPixels[dstIdx + 2] = srcPixels[srcIdx + 0]; // B
+                rgbaPixels[dstIdx + 3] = 255;                   // A
+              }
+            } else {
+              rgbaPixels = srcPixels;
+            }
+
+            // 3) 创建 Skia Image
+            const imageInfo = {
+              width,
+              height,
+              colorType: ColorType.RGBA_8888,
+              alphaType: AlphaType.Opaque,
+            };
+
             const img = Skia.Image.MakeImage(imageInfo, Skia.Data.fromBytes(rgbaPixels), width * 4);
             if (!img) throw new Error('Skia.Image.MakeImage 失败');
 
+            // 4) 编码保存
             const b64 = img.encodeToBase64(ImageFormat.JPEG, 90);
             const path = `${RNFS.CachesDirectoryPath}/face_${Date.now()}.jpg`;
             await RNFS.writeFile(path, b64, 'base64');
 
-            // ✅ 更新 UI 显示：取当前 boxes 中的第一个名字（或根据业务逻辑选择）
-            const currentName = boxes.length > 0 ? (boxes[0].name || '未知') : '未检测到人脸';
-            setLastCapture({
-              uri: `file://${path}`,
-              name: currentName
-            });
-
-            console.log('抓拍成功:', path);
-          } catch (e) {
-            console.error('保存失败:', e);
+            console.log('--- 抓拍成功 --- 路径:', path);
+          } catch (e: any) {
+            console.error('JS线程: 保存流程发生错误:', e?.message ?? e);
           } finally {
             setIsSaving(false);
           }
         }
       ),
-    [boxes] // 依赖 boxes 以便获取最新的名字
+    []
   );
 
   function getDisplayFrameSize(frame: Frame,rotation: number) {
@@ -528,6 +514,11 @@ export default function RealTimeRecognitionScreen() {
     return { w, h };
   }
 
+  function calcResizeKeepAspect(frameW: number, frameH: number, targetW: number) {
+    'worklet';
+    const h = Math.max(1, Math.round(targetW * (frameH / frameW)));
+    return { w: targetW, h };
+  }
 
   const frameProcessor = useFrameProcessor(
     (frame: Frame) => {
@@ -542,6 +533,9 @@ export default function RealTimeRecognitionScreen() {
 
           let rotDegress = getFrameRotationDegrees(frame);
           const { w: frameW, h: frameH } = getDisplayFrameSize(frame,rotDegress);
+          const targetW = 320;
+          const { w: coordW, h: coordH } = calcResizeKeepAspect(frameW, frameH, targetW);
+
           // 反向旋转来纠正图像（让 resized 和预览一致）
           let rotationResized: string =
             rotDegress === 90 ? '270deg' :
@@ -550,9 +544,6 @@ export default function RealTimeRecognitionScreen() {
 
           let pixelFormatResized: 'bgr' | 'rgba' = 'bgr';
           const scaleSize = 320;
-          const rotDeg = rotDegress;
-          const coordW = scaleSize;
-          const coordH = scaleSize;
           console.log(`JS线程: 原始尺寸 ${frameW}x${frameH}, 旋转角度 ${rotDegress}, 缩放尺寸 ${scaleSize}x${scaleSize}, 像素格式 ${pixelFormatResized}`);
 
           let bitmap: any = null;
@@ -561,7 +552,7 @@ export default function RealTimeRecognitionScreen() {
           try {
             // ✅ 识别输入：固定 320x320（正方形），并且 rotation+mirror 后就是“正确视角”
             const resized = resize(frame, {
-              scale: {width: scaleSize, height: scaleSize},
+              scale: {width: coordW, height: coordH},
               rotation: rotationResized,
               pixelFormat: pixelFormatResized,
               dataType: 'uint8',
@@ -574,8 +565,8 @@ export default function RealTimeRecognitionScreen() {
                 rotDeg: rotDegress,
                 mode: 0,
                 anchor: 0,
-                coordW: scaleSize,
-                coordH: scaleSize,
+                coordW: coordW,
+                coordH: coordH,
                 frameW: frameW,
                 frameH: frameH,
                 faces: [],
@@ -584,18 +575,29 @@ export default function RealTimeRecognitionScreen() {
               return;
             }
 
-
+            const rotDeg = getFrameRotationDegrees(frame);
 
             // 2) 抓拍逻辑（保存 320x320）
             if (shouldCapture.value) {
               shouldCapture.value = false;
-              const base64 = unboxed.toBase64(resized.buffer);
-              saveImage({
-                base64: base64,
-                width: scaleSize,
-                height: scaleSize,
-                format: pixelFormatResized,
+
+              const resized2 = resize(frame, {
+                scale: {width: coordW, height: coordH},
+                rotation: rotationResized,
+                pixelFormat: pixelFormatResized,
+                dataType: 'uint8',
+                mirror: isFront,
               });
+
+              if (resized2 && resized2.buffer) {
+                const base64 = unboxed.toBase64(resized2.buffer);
+                saveImage({
+                  base64: base64,
+                  width: coordW,
+                  height: coordH,
+                  format: pixelFormatResized,
+                });
+              }
             }
 
             // ✅ 注意：bitmap/imageStream 也必须使用 320x320，并且 ROTATION_0（因为我们已经旋转纠正过）
@@ -671,7 +673,7 @@ export default function RealTimeRecognitionScreen() {
                 width: bw,
                 height: bh,
                 trackId: face.trackId,
-                hubId: searched?.id || face.trackId,
+                hubId: searched?.id || -1,
                 name: '',
                 confidence,
                 isMatched,
@@ -791,7 +793,7 @@ export default function RealTimeRecognitionScreen() {
             }
           }}
         >
-          {boxes.map((b, index) => { // <-- 增加 index 参数
+          {boxes.map((b) => {
             let label = b.name || `ID:${b.id}`;
             if (b.isMatched && b.confidence) label += ` (${(b.confidence * 100).toFixed(1)}%)`;
 
@@ -808,9 +810,8 @@ export default function RealTimeRecognitionScreen() {
             const bgX = b.x;
             const bgY = Math.max(0, b.y - textH - 6);
 
-            // 使用组合 Key 解决冲突
             return (
-              <React.Fragment key={`face-box-${b.id}-${index}`}>
+              <React.Fragment key={`face-box-${b.id}`}>
                 <Rect
                   x={b.x}
                   y={b.y}
@@ -858,24 +859,6 @@ export default function RealTimeRecognitionScreen() {
               />
             </>
           )}
-
-          {/* 显示签到人数统计 - 右上角 */}
-          <Rect x={cameraW - 200} y={10} width={190} height={60} color={BG_BLACK50}/>
-          <SkiaText
-            x={cameraW - 190}
-            y={30}
-            text={`未签到: ${qisum0}`}
-            font={font}
-            color={COLOR_WHITE}
-          />
-          <SkiaText
-            x={cameraW - 190}
-            y={55}
-            text={`已签到: ${qisum1}`}
-            font={font}
-            color={COLOR_WHITE}
-          />
-
         </Canvas>
 
         <View style={styles.controlsContainer}>
@@ -903,61 +886,9 @@ export default function RealTimeRecognitionScreen() {
         </View>
       </View>
 
-      {/* 底部显示区域 */}
-      <View id="showview" style={[styles.showView, { }]}>
-        <View style={styles.showViewContent}>
-
-          {/* 左侧 2/5：抓拍图 */}
-          <View style={styles.captureLeft}>
-            {lastCapture.uri ? (
-              <TouchableOpacity
-                style={styles.capturedImageContainer}
-                onPress={() => setIsModalVisible(true)}
-              >
-                <Image
-                  source={{ uri: lastCapture.uri }}
-                  style={styles.capturedImage}
-                  // contain: 保证图片完整显示在框内
-                  // cover: 保证图片填满框（可能会切掉人脸边缘）
-                  resizeMode="contain"
-                />
-              </TouchableOpacity>
-            ) : (
-              <View style={styles.imagePlaceholder}>
-                <Text style={styles.placeholderText}>等待抓拍</Text>
-              </View>
-            )}
-          </View>
-
-          {/* 右侧 3/5：姓名展示 */}
-          <View style={styles.nameRight}>
-            <Text style={styles.labelTitle}>识别结果</Text>
-            <Text style={styles.resultName}>{lastCapture.name || '---'}</Text>
-          </View>
-
-        </View>
+      <View id="showview" style={[styles.showView, { width: cameraW, height: showH }]}>
+        {/* 这里放你的 showview 内容 */}
       </View>
-      {/* 全屏查看 Modal */}
-      <Modal
-        visible={isModalVisible}
-        transparent={true}
-        onRequestClose={() => setIsModalVisible(false)}
-      >
-        <Pressable
-          style={styles.modalOverlay}
-          onPress={() => setIsModalVisible(false)}
-        >
-          <Image
-            source={{ uri: lastCapture.uri || '' }}
-            style={styles.fullImage}
-            resizeMode="contain" // 全屏查看时显示完整图片
-          />
-          <View style={styles.closeHint}>
-            <Text style={styles.closeHintText}>点击任意位置关闭</Text>
-          </View>
-        </Pressable>
-      </Modal>
-
     </View>
   );
 }
@@ -996,103 +927,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'black',
   },
   showView: {
-    flex: 1, // ✨ 关键：自动占据相机下方的所有剩余空间
-    backgroundColor: '#1a1a1a',
-    borderTopWidth: 1,
-    borderTopColor: '#333',
-    paddingBottom: 5, // ✨ 增加底部内边距，防止被系统导航条遮挡
-  },
-  showViewContent: {
-    flex: 1,
-    flexDirection: 'row', // 水平排列
-  },
-  captureLeft: {
-    flex: 2, // 占 2 份宽度
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 10, // 留一点边距更美观
-    backgroundColor: '#111', // 给个深色底，防止图片比例不符时露白
-  },
-
-  capturedImageContainer: {
-    // 关键：强制让图片容器在父容器内自适应，且不超出
-    width: '100%',
-    height: '100%',
-    borderRadius: 8,
-    overflow: 'hidden', // 必须：裁剪超出部分
-    borderWidth: 1,
-    borderColor: '#444',
-  },
-
-  capturedImage: {
-    width: '100%',
-    height: '100%',
-    // 关键：使用 contain 模式可以完整看到整张图（不裁剪）
-    // 如果你希望填满格子可以使用 cover，但会裁剪边缘
-  },
-
-  nameRight: {
-    flex: 3, // 占 3 份宽度
-    justifyContent: 'center',
-    paddingLeft: 15,
-  },
-
-  // Modal 样式调整
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.95)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  fullImage: {
-    // 使用屏幕宽度作为参考，确保全屏显示
-    width: Dimensions.get('window').width,
-    height: Dimensions.get('window').height,
-  },
-  closeHint: {
-    position: 'absolute',
-    bottom: 50,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 20,
-  },
-  closeHintText: {
-    color: '#fff',
-    fontSize: 14,
-  },
-
-  nameRight: {
-    flex: 3, // 占 4/5
-    justifyContent: 'center',
-    paddingLeft: 20,
-  },
-  capturedImage: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 8,
-    backgroundColor: '#000',
-  },
-  imagePlaceholder: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 8,
-    backgroundColor: '#222',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  placeholderText: {
-    color: '#666',
-    fontSize: 12,
-  },
-  labelTitle: {
-    color: '#999',
-    fontSize: 14,
-    marginBottom: 4,
-  },
-  resultName: {
-    color: '#00ff00',
-    fontSize: 32,
-    fontWeight: 'bold',
+    // 尺寸由外层 inline style 传入
+    backgroundColor: 'white', // 你想要啥背景自己改
   },
 });
+
