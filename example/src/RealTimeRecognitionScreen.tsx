@@ -8,6 +8,7 @@ import {
   Text,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import {useFocusEffect, useIsFocused} from '@react-navigation/native';
 
@@ -335,6 +336,13 @@ function pickBestFormat(device: any) {
 }
 
 export default function RealTimeRecognitionScreen() {
+  const { width: screenW, height: screenH } = useWindowDimensions();
+  // 80% 给 cameraView，20% 给 showView
+  const cameraH = Math.round(screenH * 0.8);
+  // cameraView 宽度用屏幕实际宽度（不写 100%）
+  const cameraW = Math.round(screenW);
+  const showH = Math.max(0, screenH - cameraH);
+
   const [cameraType, setCameraType] = useState<'front' | 'back'>('front');
   const [frameProcessorFps, setFrameProcessorFps] = useState(DLX_CONFIG.INSPIREFACE_FRAME_PROCESSOR_FPS);
   const [confidenceThreshold, setConfidenceThreshold] = useState(DLX_CONFIG.INSPIREFACE_CONFIDENCE_THRESHOLD);
@@ -946,7 +954,8 @@ export default function RealTimeRecognitionScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <View id="full" style={styles.full}>
+      <View id="cameraview" style={[styles.cameraView, { width: cameraW, height: cameraH }]}>
       <Camera
         ref={camera}
         style={StyleSheet.absoluteFill}
@@ -1068,6 +1077,10 @@ export default function RealTimeRecognitionScreen() {
 
       </View>
     </View>
+      <View id="showview" style={[styles.showView, { width: cameraW, height: showH }]}>
+        {/* 这里放你的 showview 内容 */}
+      </View>
+    </View>
   );
 }
 
@@ -1094,4 +1107,21 @@ const styles = StyleSheet.create({
   buttonText: {color: 'white', fontSize: 16, fontWeight: 'bold'},
   primaryButton: {backgroundColor: 'rgba(0, 122, 255, 0.8)'},
   dangerButton: {backgroundColor: 'rgba(255, 59, 48, 0.8)'},
+
+  full: {
+    flex: 1,
+    flexDirection: 'column',
+    backgroundColor: 'black',
+  },
+  cameraView: {
+    flex: 0.8, // ✅ 80%
+    width: '100%',
+    backgroundColor: 'black',
+  },
+  showView: {
+    flex: 0.2,// ✅ 20%
+    width: '100%',
+    backgroundColor: '#111', // 你想要啥背景自己改
+  },
+
 });
