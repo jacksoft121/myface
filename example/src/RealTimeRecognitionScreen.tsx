@@ -8,7 +8,7 @@ import {
   Text,
   TouchableOpacity,
   View,
-  useWindowDimensions,
+  useWindowDimensions, Image,
 } from 'react-native';
 import {useFocusEffect, useIsFocused} from '@react-navigation/native';
 
@@ -436,73 +436,58 @@ export default function RealTimeRecognitionScreen() {
   // 1. 增加拍照状态
   const shouldCapture = useMemo(() => Worklets.createSharedValue(false), []); // Worklets-core 方式
   const [isSaving, setIsSaving] = useState(false);
-
+// 存储最后一次抓拍的信息
+  const [lastCapture, setLastCapture] = useState<{uri: string | null, name: string}>({
+    uri: null,
+    name: ''
+  });
   const saveImage = useMemo(
     () =>
       Worklets.createRunOnJS(
         async (payload: { base64: string; width: number; height: number; format: 'bgr' | 'rgba' }) => {
-          console.log('--- JS线程: saveImage 开始处理 ---');
           setIsSaving(true);
-
           try {
             const { base64, width, height, format } = payload;
-
-            // 1) base64 -> ArrayBuffer -> Uint8Array
-            console.log('base64.len=', base64?.length);
             const unboxed = BoxedInspireFace.unbox();
             const buffer: ArrayBuffer = unboxed.fromBase64(base64);
             const srcPixels = new Uint8Array(buffer);
 
-            const expectedLen = format === 'bgr' ? width * height * 3 : width * height * 4;
-            console.log(`JS线程: 尺寸 ${width}x${height}, format=${format}, 数据长度: ${srcPixels.length}, expected=${expectedLen}`);
-
-            if (srcPixels.length < expectedLen) {
-              throw new Error(`像素长度不匹配：got=${srcPixels.length}, expected=${expectedLen}`);
-            }
-
-            let rgbaPixels: Uint8Array;
-
-            // 2) 转 RGBA
+            // ... (之前的 RGBA 转换逻辑保持不变)
+            let rgbaPixels = new Uint8Array(width * height * 4);
             if (format === 'bgr') {
-              rgbaPixels = new Uint8Array(width * height * 4);
-              // BGR(3) -> RGBA(4)
               for (let i = 0; i < width * height; i++) {
-                const srcIdx = i * 3;
-                const dstIdx = i * 4;
-                rgbaPixels[dstIdx + 0] = srcPixels[srcIdx + 2]; // R
-                rgbaPixels[dstIdx + 1] = srcPixels[srcIdx + 1]; // G
-                rgbaPixels[dstIdx + 2] = srcPixels[srcIdx + 0]; // B
-                rgbaPixels[dstIdx + 3] = 255;                   // A
+                const srcIdx = i * 3; const dstIdx = i * 4;
+                rgbaPixels[dstIdx + 0] = srcPixels[srcIdx + 2];
+                rgbaPixels[dstIdx + 1] = srcPixels[srcIdx + 1];
+                rgbaPixels[dstIdx + 2] = srcPixels[srcIdx + 0];
+                rgbaPixels[dstIdx + 3] = 255;
               }
-            } else {
-              rgbaPixels = srcPixels;
-            }
+            } else { rgbaPixels = srcPixels; }
 
-            // 3) 创建 Skia Image
-            const imageInfo = {
-              width,
-              height,
-              colorType: ColorType.RGBA_8888,
-              alphaType: AlphaType.Opaque,
-            };
-
+            const imageInfo = { width, height, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Opaque };
             const img = Skia.Image.MakeImage(imageInfo, Skia.Data.fromBytes(rgbaPixels), width * 4);
             if (!img) throw new Error('Skia.Image.MakeImage 失败');
 
-            // 4) 编码保存
             const b64 = img.encodeToBase64(ImageFormat.JPEG, 90);
             const path = `${RNFS.CachesDirectoryPath}/face_${Date.now()}.jpg`;
             await RNFS.writeFile(path, b64, 'base64');
 
-            console.log('--- 抓拍成功 --- 路径:', path);
-          } catch (e: any) {
-            console.error('JS线程: 保存流程发生错误:', e?.message ?? e);
+            // ✅ 更新 UI 显示：取当前 boxes 中的第一个名字（或根据业务逻辑选择）
+            const currentName = boxes.length > 0 ? (boxes[0].name || '未知') : '未检测到人脸';
+            setLastCapture({
+              uri: `file://${path}`,
+              name: currentName
+            });
+
+            console.log('抓拍成功:', path);
+          } catch (e) {
+            console.error('保存失败:', e);
           } finally {
             setIsSaving(false);
           }
         }
       ),
-    []
+    [boxes] // 依赖 boxes 以便获取最新的名字
   );
 
   function getDisplayFrameSize(frame: Frame,rotation: number) {
@@ -537,6 +522,9 @@ export default function RealTimeRecognitionScreen() {
 
           let pixelFormatResized: 'bgr' | 'rgba' = 'bgr';
           const scaleSize = 320;
+          const rotDeg = rotDegress;
+          const coordW = scaleSize;
+          const coordH = scaleSize;
           console.log(`JS线程: 原始尺寸 ${frameW}x${frameH}, 旋转角度 ${rotDegress}, 缩放尺寸 ${scaleSize}x${scaleSize}, 像素格式 ${pixelFormatResized}`);
 
           let bitmap: any = null;
@@ -568,31 +556,18 @@ export default function RealTimeRecognitionScreen() {
               return;
             }
 
-            const rotDeg = getFrameRotationDegrees(frame);
-            const coordW = scaleSize;
-            const coordH = scaleSize;
+
 
             // 2) 抓拍逻辑（保存 320x320）
             if (shouldCapture.value) {
               shouldCapture.value = false;
-
-              const resized2 = resize(frame, {
-                scale: {width: scaleSize, height: scaleSize},
-                rotation: rotationResized,
-                pixelFormat: pixelFormatResized,
-                dataType: 'uint8',
-                mirror: isFront,
+              const base64 = unboxed.toBase64(resized.buffer);
+              saveImage({
+                base64: base64,
+                width: scaleSize,
+                height: scaleSize,
+                format: pixelFormatResized,
               });
-
-              if (resized2 && resized2.buffer) {
-                const base64 = unboxed.toBase64(resized2.buffer);
-                saveImage({
-                  base64: base64,
-                  width: scaleSize,
-                  height: scaleSize,
-                  format: pixelFormatResized,
-                });
-              }
             }
 
             // ✅ 注意：bitmap/imageStream 也必须使用 320x320，并且 ROTATION_0（因为我们已经旋转纠正过）
@@ -668,7 +643,7 @@ export default function RealTimeRecognitionScreen() {
                 width: bw,
                 height: bh,
                 trackId: face.trackId,
-                hubId: searched?.id || -1,
+                hubId: searched?.id || face.trackId,
                 name: '',
                 confidence,
                 isMatched,
@@ -882,8 +857,32 @@ export default function RealTimeRecognitionScreen() {
         </View>
       </View>
 
+      {/* 底部显示区域 */}
       <View id="showview" style={[styles.showView, { width: cameraW, height: showH }]}>
-        {/* 这里放你的 showview 内容 */}
+        <View style={styles.showViewContent}>
+
+          {/* 左侧 1/5：抓拍图 */}
+          <View style={styles.captureLeft}>
+            {lastCapture.uri ? (
+              <Image
+                source={{ uri: lastCapture.uri }}
+                style={styles.capturedImage}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={styles.imagePlaceholder}>
+                <Text style={styles.placeholderText}>等待抓拍</Text>
+              </View>
+            )}
+          </View>
+
+          {/* 右侧 4/5：姓名展示 */}
+          <View style={styles.nameRight}>
+            <Text style={styles.labelTitle}>识别结果</Text>
+            <Text style={styles.resultName}>{lastCapture.name || '---'}</Text>
+          </View>
+
+        </View>
       </View>
     </View>
   );
@@ -923,7 +922,53 @@ const styles = StyleSheet.create({
     backgroundColor: 'black',
   },
   showView: {
-    // 尺寸由外层 inline style 传入
-    backgroundColor: '#111', // 你想要啥背景自己改
+    backgroundColor: '#1a1a1a', // 深色背景看起来更高端
+    borderTopWidth: 1,
+    borderTopColor: '#333',
+  },
+  showViewContent: {
+    flex: 1,
+    flexDirection: 'row', // 水平排列
+  },
+  captureLeft: {
+    flex: 2, // 占 1/5
+    borderRightWidth: 1,
+    borderRightColor: '#333',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 5,
+  },
+  nameRight: {
+    flex: 3, // 占 4/5
+    justifyContent: 'center',
+    paddingLeft: 20,
+  },
+  capturedImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 8,
+    backgroundColor: '#000',
+  },
+  imagePlaceholder: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 8,
+    backgroundColor: '#222',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  placeholderText: {
+    color: '#666',
+    fontSize: 12,
+  },
+  labelTitle: {
+    color: '#999',
+    fontSize: 14,
+    marginBottom: 4,
+  },
+  resultName: {
+    color: '#00ff00',
+    fontSize: 32,
+    fontWeight: 'bold',
   },
 });
