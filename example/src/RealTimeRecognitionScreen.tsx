@@ -672,8 +672,11 @@ export default function RealTimeRecognitionScreen() {
             adjustedHeight = widthFrame;
           }
           let pixelFormatResized = 'bgr'; // 'rgba'
+          const scaleSize = 320;
+
           console.log(`isFront=${isFront}, isMirrored=${isMirrored}, orientation=${orientation}, rotDegress=${rotDegress}, rotationResized=${rotationResized}, rotDegressCamera=${rotDegressCamera}, pixelFormat=${pixelFormat}, width=${widthFrame}, height=${heightFrame}, adjustedWidth=${adjustedWidth}, adjustedHeight=${adjustedHeight}`);
           // 2. 调整图像，把图正过来
+          /*
           const resizedFrame = resize(frame, {
             scale: {width: adjustedWidth, height: adjustedHeight},
             rotation: rotationResized,
@@ -689,6 +692,7 @@ export default function RealTimeRecognitionScreen() {
             height: heightFrame,
             format: pixelFormatResized,
           });
+          */
 
           let bitmap: any = null;
           let imageStream: any = null;
@@ -697,26 +701,12 @@ export default function RealTimeRecognitionScreen() {
           try {
             // ✅ resize 只做缩放，不旋转不镜像（保证 SDK 识别稳定）
             const resized = resize(frame, {
-              scale: {width: SRC_W, height: SRC_H},
-              rotation: '0deg',
-              pixelFormat: 'bgr',
+              scale: {width: scaleSize, height: scaleSize},
+              rotation: rotationResized,
+              pixelFormat: pixelFormatResized,
               dataType: 'uint8',
-              mirror: false,
+              mirror: isFront,
             });
-
-            if (!resized?.buffer) {
-              reportFacesToJS({
-                faceCount: 0,
-                rotDeg: 0,
-                mode: 0,
-                anchor: 0,
-                coordW: SRC_W,
-                coordH: SRC_H,
-                faces: [],
-                isFrontCamera: isFront
-              });
-              return;
-            }
 
             const rotDeg = getFrameRotationDegrees(frame);
             const camRot = toCameraRotation(rotDeg);
@@ -732,9 +722,11 @@ export default function RealTimeRecognitionScreen() {
               shouldCapture.value = false;
               console.log("2shouldCapture.value=" + shouldCapture.value)
               const resized2 = resize(frame, {
-                scale: {width: SRC_W, height: SRC_H},
-                pixelFormat: 'bgr', // 建议 BGR，因为 InspireFace C++ 端对 BGR 支持最好
+                scale: {width: scaleSize, height: scaleSize},
+                rotation: rotationResized,
+                pixelFormat: pixelFormatResized,
                 dataType: 'uint8',
+                mirror: isFront,
               });
 
               if (resized2 && resized2.buffer) {
