@@ -15,8 +15,8 @@ import {useFocusEffect, useIsFocused} from '@react-navigation/native';
 import {
   BoxedInspireFace,
   CameraRotation,
-  DetectMode,
-  InspireFace,
+  DetectMode, type FaceData, type ImageBitmap,
+  InspireFace, type Session,
 } from 'react-native-nitro-inspire-face';
 import {NitroModules} from 'react-native-nitro-modules';
 
@@ -136,14 +136,6 @@ function normalizeRectToPx(rect: any, W: number, H: number) {
   let y = Number(rect?.y ?? 0);
   let w = Number(rect?.width ?? 0);
   let h = Number(rect?.height ?? 0);
-
-  // 兼容 0~1
-  if (w <= 1.5 && h <= 1.5) {
-    x *= W;
-    y *= H;
-    w *= W;
-    h *= H;
-  }
   return {x, y, width: w, height: h};
 }
 
@@ -390,14 +382,27 @@ export default function RealTimeRecognitionScreen() {
 
         const next: FaceBoxUI[] = payload.faces.map((b) => {
           // ✅ b 是 320x320 坐标，按比例还原到 Canvas
+          // 1) 320x320 rect -> frame 坐标系 rect（frameW x frameH）
+          const sx = payload.frameW / payload.coordW;
+          const sy = payload.frameH / payload.coordH;
+
+          const bFrame = {
+            x: b.x * sx,
+            y: b.y * sy,
+            width: b.width * sx,
+            height: b.height * sy,
+          };
+
+          // 2) frame rect -> Canvas 像素坐标（cover/contain）
           const mapped = mapRectToView(
-            b,
-            payload.coordW,
-            payload.coordH,
+            bFrame,
+            payload.frameW,
+            payload.frameH,
             vw,
             vh,
             CURRENT_RESIZE_MODE
           );
+
 
           const id = b.trackId ?? 0;
           const prev = smoothRef.current.get(id);
@@ -607,32 +612,11 @@ export default function RealTimeRecognitionScreen() {
             bitmap = unboxed.createImageBitmapFromBuffer(resized.buffer as ArrayBuffer, scaleSize, scaleSize, 3);
             imageStream = unboxed.createImageStreamFromBitmap(bitmap, CameraRotation.ROTATION_0);
 
-            const session = boxedSession.unbox();
-            if (!session) {
-              reportFacesToJS({
-                faceCount: 0,
-                rotDeg,
-                mode: 0,
-                anchor: 0,
-                coordW: coordW,
-                coordH: coordH,
-                frameW: frameW,
-                frameH: frameH,
-                faces: [],
-                isFrontCamera: isFront
-              });
-              return;
-            }
+            const session: Session = boxedSession.unbox();
+            //提取面部特征
+            const faceList: FaceData[] = session.executeFaceTrack(imageStream);
 
-            const facesAny: any = session.executeFaceTrack(imageStream);
-
-            const faceCount = (() => {
-              if (!facesAny) return 0;
-              if (typeof facesAny.length === 'number') return facesAny.length;
-              if (typeof facesAny.detectedNum === 'number') return facesAny.detectedNum;
-              return 0;
-            })();
-
+            const faceCount = faceList.length;
             if (faceCount <= 0) {
               reportFacesToJS({
                 faceCount: 0,
@@ -653,17 +637,14 @@ export default function RealTimeRecognitionScreen() {
             // ✅ 镜像只发生一次：预览镜像时，overlay 不镜像；否则这里镜像
             const mirrorUI = isFront && MIRROR_ON_OVERLAY;
             const out: FaceBoxBuf[] = [];
-
-            for (let i = 0; i < faceCount; i++) {
-              const f = facesAny[i] ?? {
-                token: facesAny.tokens?.[i],
-                rect: facesAny.rects?.[i],
-                trackId: facesAny.trackIds?.[i] ?? facesAny.ids?.[i],
-              };
-              if (!f?.rect || !f?.token) continue;
-
+            for (let face of faceList) {
+              // 获取人脸关键点
+              console.log('face.trackId', face.trackId);
+              console.log('face.rect', JSON.stringify(face.rect));
+              // const facePoints = unboxed.getFaceDenseLandmarkFromFaceToken(face.token);
+              // console.log('facePoints', JSON.stringify(facePoints));
               // rect 已经是“正确视角”的 320x320 坐标（因为 resized 已 rotation+mirror）
-              const r0 = normalizeRectToPx(f.rect, coordW, coordH);
+              const r0 = normalizeRectToPx(face.rect, coordW, coordH);
 
               let rU: any = { ...r0, outW: coordW, outH: coordH };
 
@@ -684,7 +665,8 @@ export default function RealTimeRecognitionScreen() {
 
               let searched: any = null;
               try {
-                const feature = session.extractFaceFeature(imageStream, f.token);
+                //提取面部特征
+                const feature = session.extractFaceFeature(imageStream, face.token);
                 searched = unboxed.featureHubFaceSearch(feature);
               } catch (error: any) {
                 console.error('特征提取或识别失败:', error?.message ?? error);
@@ -698,7 +680,7 @@ export default function RealTimeRecognitionScreen() {
                 y: by,
                 width: bw,
                 height: bh,
-                trackId: Number(i + 1),
+                trackId: face.trackId,
                 hubId: searched?.id || -1,
                 name: '',
                 confidence,
