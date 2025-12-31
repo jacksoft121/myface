@@ -1,6 +1,50 @@
 import { apiFind } from '../api';
 import { getCurrentUser } from './User';
 
+import Sound from 'react-native-sound';
+
+// 允许在后台或静音模式下播放 (iOS)
+Sound.setCategory('Playback');
+
+let isSpeechPlaying = false; // 播放锁
+
+export const speechVcName = (aID: string | number) => {
+  // 如果正在播，直接跳过，避免声音堆叠
+  if (isSpeechPlaying) return;
+
+  let vcurlvoc = '';
+  if (aID && aID !== 0 && aID !== -1) {
+    // 假设这里的 getCurrentUser 能拿到 IDORG
+    const currentUser = (global as any).currentUser;
+    if (currentUser?.IDORG) {
+      vcurlvoc = `https://dlx-face.oss-cn-shanghai.aliyuncs.com/${currentUser.IDORG}/vocname/${aID}.mp3`;
+    } else {
+      let musciPath = 'wzd.mp3';
+      vcurlvoc = musciPath;
+    }
+  } else {
+    let musciPath = 'wzd.mp3'
+    vcurlvoc = musciPath;
+  }
+
+  isSpeechPlaying = true;
+
+  // 网络音频加载，第二个参数必须是空字符串 ''
+  const sound = new Sound(vcurlvoc, '', (error) => {
+    if (error) {
+      console.warn('音频加载失败:', vcurlvoc, error);
+      isSpeechPlaying = false;
+      return;
+    }
+
+    sound.play((success) => {
+      if (!success) console.warn('播放中断');
+      sound.release(); // 释放内存
+      isSpeechPlaying = false;
+    });
+  });
+};
+
 /**
  * 解析时间字符串为数字（小时*60+分钟）
  */

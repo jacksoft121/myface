@@ -48,13 +48,13 @@ import {
   Text as SkiaText,
   useFont
 } from '@shopify/react-native-skia';
-import {useSharedValue} from 'react-native-reanimated';
+import {runOnJS, useSharedValue} from 'react-native-reanimated';
 
 import {type RegisteredFacesDTO, type FaceBoxBuf, type FaceBoxUI} from './dto/DlxTypes';
 import {DLX_CONFIG, STORAGE_KEYS, userInfoCacheStorage} from './comm/GlobalStorage';
 import {log} from './comm/logger';
 import {queryUserByFaceId} from "./comm/FaceDB";
-import {fetchAllAndProcessCourseType} from './comm/BizApi';
+import {fetchAllAndProcessCourseType, speechVcName} from './comm/BizApi';
 
 import RNFS from 'react-native-fs';
 
@@ -528,6 +528,28 @@ export default function RealTimeRecognitionScreen() {
     return { w, h };
   }
 
+// 记录上一次播报的时间，避免疯狂重复
+  const lastSpeechTime = useRef(0);
+
+  const playSpeechJS = useMemo(() => {
+    return Worklets.createRunOnJS((faceId: number) => {
+      const now = Date.now();
+      // 设置冷却时间：例如 3000 毫秒 (3秒) 内播报过就不再重播
+      if (now - lastSpeechTime.current < 3000) {
+        return;
+      }
+
+      lastSpeechTime.current = now;
+
+      try {
+        console.log('--- JS线程: 准备播放语音 ---');
+        // 调用你的业务播报函数
+        speechVcName(0);
+      } catch (e) {
+        console.error('语音播放失败:', e);
+      }
+    });
+  }, []);
 
   const frameProcessor = useFrameProcessor(
     (frame: Frame) => {
@@ -664,6 +686,10 @@ export default function RealTimeRecognitionScreen() {
 
               const confidence = searched?.confidence || 0;
               const isMatched = !!(searched?.id && confidence > confidenceThreshold);
+              // 如果识别成功，调用语音播放函数
+              if (isMatched) {
+                playSpeechJS(Number(searched.id));
+              }
 
               out.push({
                 x: bx,
