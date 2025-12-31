@@ -201,9 +201,9 @@ function pickBestFormat(device: any) {
 export default function RealTimeRecognitionScreen() {
   const { width: screenW, height: screenH } = useWindowDimensions();
   // 80% 给 cameraView，20% 给 showView
-  const cameraH = Math.round(screenH * 0.8);
+  const cameraH = Math.floor(screenH * 0.7);
   // cameraView 宽度用屏幕实际宽度（不写 100%）
-  const cameraW = Math.round(screenW);
+  const cameraW = Math.floor(screenW);
   const showH = Math.max(0, screenH - cameraH);
 
   const [cameraType, setCameraType] = useState<'front' | 'back'>('front');
@@ -218,7 +218,7 @@ export default function RealTimeRecognitionScreen() {
   const [boxes, setBoxes] = useState<FaceBoxUI[]>([]);
   const [isCameraActive, setIsCameraActive] = useState(false);
 
-  const canvasSize = useSharedValue({width: PREVIEW_W, height: PREVIEW_H});
+  const canvasSize = useSharedValue({width: cameraW, height: cameraH});
   const font = useFont(require('./assets/fonts/PingFangSC-Regular.ttf'), 18);
 
   const [cameraInitialized, setCameraInitialized] = useState(false);
@@ -243,6 +243,7 @@ export default function RealTimeRecognitionScreen() {
 
   // JS 平滑
   const smoothRef = useRef(new Map<number, FaceBoxUI>());
+  const [isSmoothingEnabled, setIsSmoothingEnabled] = useState(false);
 
   // 权限
   useFocusEffect(
@@ -364,8 +365,8 @@ export default function RealTimeRecognitionScreen() {
         if (now - lastReportTime < 66) return;
         lastReportTime = now;
 
-        const vw = canvasSize.value?.width || PREVIEW_W;
-        const vh = canvasSize.value?.height || PREVIEW_H;
+        const vw = canvasSize.value?.width || cameraW;
+        const vh = canvasSize.value?.height || cameraH;
 
         setDebug({
           faceCount: payload.faceCount,
@@ -381,33 +382,18 @@ export default function RealTimeRecognitionScreen() {
         const alpha = 0.75;
 
         const next: FaceBoxUI[] = payload.faces.map((b) => {
-          // ✅ b 是 320x320 坐标，按比例还原到 Canvas
-          // 1) 320x320 rect -> frame 坐标系 rect（frameW x frameH）
           const sx = payload.frameW / payload.coordW;
           const sy = payload.frameH / payload.coordH;
+          const bFrame = { x: b.x * sx, y: b.y * sy, width: b.width * sx, height: b.height * sy };
 
-          const bFrame = {
-            x: b.x * sx,
-            y: b.y * sy,
-            width: b.width * sx,
-            height: b.height * sy,
-          };
+          const mapped = mapRectToView(bFrame, payload.frameW, payload.frameH, vw, vh, CURRENT_RESIZE_MODE);
 
-          // 2) frame rect -> Canvas 像素坐标（cover/contain）
-          const mapped = mapRectToView(
-            bFrame,
-            payload.frameW,
-            payload.frameH,
-            vw,
-            vh,
-            CURRENT_RESIZE_MODE
-          );
+          const id = b.trackId ?? -1;
 
+          // --- 修正逻辑：只有 id != -1 时才尝试获取上一次的状态进行平滑 ---
+          const prev = (id !== -1) ? smoothRef.current.get(id) : null;
 
-          const id = b.trackId ?? 0;
-          const prev = smoothRef.current.get(id);
-
-          const smoothed = prev
+          const smoothed = (isSmoothingEnabled && prev)
             ? {
               x: prev.x + (mapped.x - prev.x) * alpha,
               y: prev.y + (mapped.y - prev.y) * alpha,
@@ -425,18 +411,19 @@ export default function RealTimeRecognitionScreen() {
           };
 
           if (b.isMatched) {
-            b.hubId = Number(b.hubId);
-            const user = queryUserByFaceId(b.hubId);
-            if (user) {
-              ui.name = user.name || '未注册';
-            }
+            const user = queryUserByFaceId(Number(b.hubId));
+            if (user) ui.name = user.name || '未注册';
           }
 
-          smoothRef.current.set(id, ui);
+          // 只有有效的 id 才存入 smoothRef
+          if (id !== -1) {
+            smoothRef.current.set(id, ui);
+          }
           return ui;
         });
 
-        const aliveIds = new Set(next.map((n) => n.id));
+        // 清理已消失的 ID
+        const aliveIds = new Set(next.map((n) => n.id).filter(i => i !== -1));
         smoothRef.current.forEach((_, key) => {
           if (!aliveIds.has(key)) smoothRef.current.delete(key);
         });
@@ -444,7 +431,7 @@ export default function RealTimeRecognitionScreen() {
         setBoxes(next);
       }
     );
-  }, [canvasSize, format]);
+  }, [canvasSize, isSmoothingEnabled, cameraW, cameraH]);
 
   // 1. 增加拍照状态
   const shouldCapture = useMemo(() => Worklets.createSharedValue(false), []); // Worklets-core 方式
@@ -801,7 +788,7 @@ export default function RealTimeRecognitionScreen() {
             }
           }}
         >
-          {boxes.map((b) => {
+          {boxes.map((b, index) => { // <-- 增加 index 参数
             let label = b.name || `ID:${b.id}`;
             if (b.isMatched && b.confidence) label += ` (${(b.confidence * 100).toFixed(1)}%)`;
 
@@ -818,8 +805,9 @@ export default function RealTimeRecognitionScreen() {
             const bgX = b.x;
             const bgY = Math.max(0, b.y - textH - 6);
 
+            // 使用组合 Key 解决冲突
             return (
-              <React.Fragment key={`face-box-${b.id}`}>
+              <React.Fragment key={`face-box-${b.id}-${index}`}>
                 <Rect
                   x={b.x}
                   y={b.y}

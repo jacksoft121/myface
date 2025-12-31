@@ -47,5 +47,5 @@ export const DLX_CONFIG = {
   INSPIREFACE_TRACK_MODE_DETECT_INTERVAL: 5, // 人脸跟踪检测间隔
   INSPIREFACE_FILTER_MINIMUM_FACE_PIXEL_SIZE: 30, // 最小人脸像素大小
   INSPIREFACE_FRAME_PROCESSOR_FPS: 15, // 帧处理器帧率
-  FACE_BOX_Y_OFFSET_RATIO: 0.2, // 调整人脸框位置：向上偏移比例（解决框偏下问题）
+  FACE_BOX_Y_OFFSET_RATIO: 0, // 调整人脸框位置：向上偏移比例（解决框偏下问题）
 };
