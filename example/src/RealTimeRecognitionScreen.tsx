@@ -243,6 +243,7 @@ export default function RealTimeRecognitionScreen() {
     base: `320x320`,
     coord: `0x0`,
     video: `0x0`,
+    frame: `0x0`,
   });
 
   // Session 单例
@@ -362,6 +363,8 @@ export default function RealTimeRecognitionScreen() {
         anchor: number;
         coordW: number;
         coordH: number;
+        frameW: number;
+        frameH: number;
         faces: FaceBoxBuf[];
         isFrontCamera: boolean;
       }) => {
@@ -379,6 +382,7 @@ export default function RealTimeRecognitionScreen() {
           anchor: payload.anchor,
           base: `320x320`,
           coord: `${payload.coordW}x${payload.coordH}`,
+          frame: `${payload.frameW}x${payload.frameH}`,
           video: `${vw}x${vh}`,
         });
 
@@ -509,6 +513,17 @@ export default function RealTimeRecognitionScreen() {
     []
   );
 
+  function getDisplayFrameSize(frame: Frame,rotation: number) {
+    'worklet';
+    const w = frame.width;
+    const h = frame.height;
+    const r = rotation; // VisionCamera 通常是 0/90/180/270
+
+    if (r === 90 || r === 270) return { w: h, h: w };
+    return { w, h };
+  }
+
+
   const frameProcessor = useFrameProcessor(
     (frame: Frame) => {
       'worklet';
@@ -521,6 +536,7 @@ export default function RealTimeRecognitionScreen() {
           const isFront = cameraType === 'front';
 
           let rotDegress = getFrameRotationDegrees(frame);
+          const { w: frameW, h: frameH } = getDisplayFrameSize(frame,rotDegress);
           // 反向旋转来纠正图像（让 resized 和预览一致）
           let rotationResized: string =
             rotDegress === 90 ? '270deg' :
@@ -529,6 +545,7 @@ export default function RealTimeRecognitionScreen() {
 
           let pixelFormatResized: 'bgr' | 'rgba' = 'bgr';
           const scaleSize = 320;
+          console.log(`JS线程: 原始尺寸 ${frameW}x${frameH}, 旋转角度 ${rotDegress}, 缩放尺寸 ${scaleSize}x${scaleSize}, 像素格式 ${pixelFormatResized}`);
 
           let bitmap: any = null;
           let imageStream: any = null;
@@ -551,6 +568,8 @@ export default function RealTimeRecognitionScreen() {
                 anchor: 0,
                 coordW: scaleSize,
                 coordH: scaleSize,
+                frameW: frameW,
+                frameH: frameH,
                 faces: [],
                 isFrontCamera: isFront
               });
@@ -597,6 +616,8 @@ export default function RealTimeRecognitionScreen() {
                 anchor: 0,
                 coordW: coordW,
                 coordH: coordH,
+                frameW: frameW,
+                frameH: frameH,
                 faces: [],
                 isFrontCamera: isFront
               });
@@ -620,6 +641,8 @@ export default function RealTimeRecognitionScreen() {
                 anchor: 0,
                 coordW: coordW,
                 coordH: coordH,
+                frameW: frameW,
+                frameH: frameH,
                 faces: [],
                 isFrontCamera: isFront
               });
@@ -692,6 +715,8 @@ export default function RealTimeRecognitionScreen() {
               anchor: 0,
               coordW,
               coordH,
+              frameW: frameW,
+              frameH: frameH,
               faces: out,
               isFrontCamera: isFront,
             });
@@ -703,6 +728,8 @@ export default function RealTimeRecognitionScreen() {
               anchor: 0,
               coordW: 320,
               coordH: 320,
+              frameW: frameW,
+              frameH: frameH,
               faces: [],
               isFrontCamera: isFront
             });
@@ -769,7 +796,7 @@ export default function RealTimeRecognitionScreen() {
       <View id="cameraview" style={[styles.cameraView, { width: cameraW, height: cameraH }]}>
         <Camera
           ref={camera}
-          style={StyleSheet.absoluteFill}
+          style={[StyleSheet.absoluteFill, { width: cameraW, height: cameraH }]}
           device={device}
           isActive={isFocused && cameraInitialized && isCameraActive}
           frameProcessor={frameProcessor}
@@ -846,6 +873,13 @@ export default function RealTimeRecognitionScreen() {
                 x={20}
                 y={88}
                 text={`coord:${debug.coord} canvas:${debug.video}`}
+                font={font}
+                color={COLOR_WHITE}
+              />
+              <SkiaText
+                x={20}
+                y={108}
+                text={`frame:${debug.frame}`}
                 font={font}
                 color={COLOR_WHITE}
               />
