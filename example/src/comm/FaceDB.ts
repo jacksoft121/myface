@@ -2,7 +2,7 @@
 import { QuickSQLite } from 'react-native-quick-sqlite';
 import { DLX_CONFIG } from './GlobalStorage';
 
-export type User = {
+export type FaceUser = {
   id: number;
   name: string;
   dlx_user_id?: string;
@@ -69,7 +69,7 @@ export function diagnosticTest() {
   console.log('Diagnostic: Raw first row:', JSON.stringify(rawData.data));
 }
 
-function mapRowToUser(r: any): User {
+function mapRowToUser(r: any): FaceUser {
   return {
     id: Number(r.id),
     name: String(r.name),
@@ -124,27 +124,42 @@ export function updateDlxUserByFaceId(
 /**
  * 根据 FaceID 查询用户（同步直接返回对象）
  */
-export function queryUserByFaceId(faceId: number): User | null {
+export function queryUserByFaceId(faceId: number): FaceUser | null {
   const { data } = run(`SELECT * FROM ${TABLE} WHERE id = ? LIMIT 1`, [faceId]);
   return data.length > 0 ? mapRowToUser(data[0]) : null;
 }
 
-export function queryUsersByName(name: string): User[] {
+
+/**
+ * 根据 FaceID 数组批量查询用户（同步返回用户数组）
+ */
+export function queryUsersByFaceIds(faceIds: number[]): FaceUser[] {
+  if (faceIds.length === 0) {
+    return [];
+  }
+
+  // 构建 IN 查询的占位符
+  const placeholders = faceIds.map(() => '?').join(',');
+  const { data } = run(`SELECT * FROM ${TABLE} WHERE id IN (${placeholders}) ORDER BY id ASC`, faceIds);
+  return data.map(mapRowToUser);
+}
+
+export function queryUsersByName(name: string): FaceUser[] {
   const { data } = run(`SELECT * FROM ${TABLE} WHERE name = ? ORDER BY id ASC`, [name]);
   return data.map(mapRowToUser);
 }
 
-export function queryUserByDlxUserId(dlxUserId: string): User | null {
+export function queryUserByDlxUserId(dlxUserId: string): FaceUser | null {
   const { data } = run(`SELECT * FROM ${TABLE} WHERE dlx_user_id = ? LIMIT 1`, [dlxUserId]);
   return data.length > 0 ? mapRowToUser(data[0]) : null;
 }
 
-export function queryUsersByDlxUserRole(dlxUserRole: string): User[] {
+export function queryUsersByDlxUserRole(dlxUserRole: string): FaceUser[] {
   const { data } = run(`SELECT * FROM ${TABLE} WHERE dlx_user_role = ? ORDER BY id ASC`, [dlxUserRole]);
   return data.map(mapRowToUser);
 }
 
-export function queryUserByDlxInfo(dlxUserId: string, dlxUserRole: string): User | null {
+export function queryUserByDlxInfo(dlxUserId: string, dlxUserRole: string): FaceUser | null {
   const { data } = run(`SELECT * FROM ${TABLE} WHERE dlx_user_id = ? AND dlx_user_role = ? LIMIT 1`, [dlxUserId, dlxUserRole]);
   return data.length > 0 ? mapRowToUser(data[0]) : null;
 }
@@ -169,7 +184,7 @@ export function deleteAll(): number {
   return Number(res?.rowsAffected ?? 0);
 }
 
-export function getAllUsers(): User[] {
+export function getAllUsers(): FaceUser[] {
   const { data } = run(`SELECT * FROM ${TABLE} ORDER BY id ASC`);
   return data.map(mapRowToUser);
 }
@@ -179,7 +194,7 @@ export function updateName(id: number, newName: string): number {
   return Number(res?.rowsAffected ?? 0);
 }
 
-export function queryUsersByOrgId(orgId: string): User[] {
+export function queryUsersByOrgId(orgId: string): FaceUser[] {
   const { data } = run(`SELECT * FROM ${TABLE} WHERE dlx_user_org_id = ?`, [orgId]);
   return data.map(mapRowToUser);
 }

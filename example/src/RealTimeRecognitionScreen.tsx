@@ -53,7 +53,7 @@ import {runOnJS, useSharedValue} from 'react-native-reanimated';
 import {type RegisteredFacesDTO, type FaceBoxBuf, type FaceBoxUI} from './dto/DlxTypes';
 import {DLX_CONFIG, STORAGE_KEYS, userInfoCacheStorage} from './comm/GlobalStorage';
 import {log} from './comm/logger';
-import {queryUserByFaceId} from "./comm/FaceDB";
+import {type FaceUser, getAllUsers, queryUserByFaceId, queryUsersByFaceIds} from "./comm/FaceDB";
 import {fetchAllAndProcessCourseType, speechVcName} from './comm/BizApi';
 
 import RNFS from 'react-native-fs';
@@ -244,6 +244,7 @@ export default function RealTimeRecognitionScreen() {
   const [studentData, setStudentData] = useState<any[]>([]); // 全局存储学生数据
   const [teacherData, setTeacherData] = useState<any[]>([]); // 全局存储教师数据
   const [isDataLoaded, setIsDataLoaded] = useState(false); // 数据是否已加载
+  const regUsersShared = useSharedValue<FaceUser[]>([]);
 
 // 添加课程人数统计状态
   const [qisum0, setQisum0] = useState(0); // 未签到人数
@@ -262,6 +263,16 @@ export default function RealTimeRecognitionScreen() {
           setStudentData(result.findStu || []);
           setTeacherData(result.findTeacher || []);
           setIsDataLoaded(true);
+          try {
+            const users = await getAllUsers();
+            regUsersShared.value = users;
+            const hubCount = InspireFace.featureHubGetFaceCount();
+            setHubFaceCount(hubCount);
+            log(`Reloaded faces: ${users.length}, hubCount: ${hubCount}`);
+            console.log(`已加载 ${users.length} 个用户到regUsers中`);
+          } catch (error) {
+            console.error('加载用户数据失败:', error);
+          }
           console.log('初始化课程数据加载完成');
         }
       } catch (error) {
@@ -385,8 +396,8 @@ export default function RealTimeRecognitionScreen() {
   const playSpeechJS = useMemo(() => {
     return Worklets.createRunOnJS((faceId: number) => {
       const now = Date.now();
-      // 设置冷却时间：例如 3000 毫秒 (3秒) 内播报过就不再重播
-      if (now - lastSpeechTime.current < 3000) {
+      // 设置冷却时间：例如 2000 毫秒 (3秒) 内播报过就不再重播
+      if (now - lastSpeechTime.current < 2000) {
         return;
       }
 
@@ -395,7 +406,7 @@ export default function RealTimeRecognitionScreen() {
       try {
         console.log('--- JS线程: 准备播放语音 ---');
         // 调用你的业务播报函数
-        speechVcName(0);
+        speechVcName(faceId);
 
         // 同时更新学生状态
         const userId = faceId.toString();
@@ -437,43 +448,6 @@ export default function RealTimeRecognitionScreen() {
       };
     }, [])
   );
-
-  // 同步注册库
-  useEffect(() => {
-    if (!isFocused || !hasPermission) return;
-
-    const loadRegisteredFaces = async () => {
-      try {
-        const allKeys = userInfoCacheStorage.getAllKeys();
-        let cnt = 0;
-
-        for (const key of allKeys) {
-          const jsonString = userInfoCacheStorage.getString(key);
-          if (!jsonString) continue;
-
-          if (key === STORAGE_KEYS.REGISTERED_FACES) {
-            const faces: RegisteredFacesDTO[] = JSON.parse(jsonString);
-            cnt += faces.length;
-          } else {
-            try {
-              const userData: RegisteredFacesDTO = JSON.parse(jsonString);
-              if (userData?.faceId && userData.name) cnt += 1;
-            } catch (e) {
-              log(`解析用户数据失败: ${key}`, e);
-            }
-          }
-        }
-
-        const hubCount = InspireFace.featureHubGetFaceCount();
-        setHubFaceCount(hubCount);
-        log(`Reloaded faces: ${cnt}, hubCount: ${hubCount}`);
-      } catch (e) {
-        log('Reload faces error:', e);
-      }
-    };
-
-    loadRegisteredFaces();
-  }, [isFocused, hasPermission]);
 
   const boxedSession = useMemo(() => {
     if (sessionRef.current) return sessionRef.current;
@@ -559,7 +533,7 @@ export default function RealTimeRecognitionScreen() {
           const id = b.trackId ?? -1;
 
           // --- 修正逻辑：只有 id != -1 时才尝试获取上一次的状态进行平滑 ---
-          const prev = (id !== -1) ? smoothRef.current.get(id) : null;
+          const prev = (id > 0) ? smoothRef.current.get(id) : null;
 
           const smoothed = (isSmoothingEnabled && prev)
             ? {
@@ -569,19 +543,28 @@ export default function RealTimeRecognitionScreen() {
               height: prev.height + (mapped.height - prev.height) * alpha,
             }
             : mapped;
-
+          if (b.isMatched) {
+            // 从regUsers中查询用户数据
+            const regUsers= regUsersShared.value;
+            const user = regUsers.find(u => u.id === Number(b.hubId));
+            if (user) {
+              b.name = user.name;
+              playSpeechJS(user.dlx_user_id);
+            }else {
+              b.name = '在人脸库中查不到数据id='+b.hubId;
+            }
+          }else {
+            b.name = '未注册';
+          }
           const ui: FaceBoxUI = {
             ...smoothed,
             id,
-            name: b.name || '',
+            name: b.name,
             confidence: b.confidence,
             isMatched: b.isMatched,
           };
 
-          if (b.isMatched) {
-            const user = queryUserByFaceId(Number(b.hubId));
-            if (user) ui.name = user.name || '未注册';
-          }
+
 
           // 只有有效的 id 才存入 smoothRef
           if (id !== -1) {
@@ -806,10 +789,6 @@ export default function RealTimeRecognitionScreen() {
 
               const confidence = searched?.confidence || 0;
               const isMatched = !!(searched?.id && confidence > confidenceThreshold);
-              // 如果识别成功，调用语音播放函数
-              if (isMatched) {
-                playSpeechJS(Number(searched.id));
-              }
 
               out.push({
                 x: bx,
