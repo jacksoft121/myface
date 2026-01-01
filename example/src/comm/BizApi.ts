@@ -161,8 +161,19 @@ export const findInfo = async (onCourseTypeUpdate?: (courseType: any) => void) =
     });
 
     console.log('findInfo result:', result);
-
-    return result.data['#result-set-1'];
+  //"#result-set-2": [
+    //       {
+    //         "ID": "2",
+    //         "VCNAME": "午托",
+    //         "ISQD": "1",
+    //         "DTQDS": "00:00",
+    //         "DTQDE": "23:00",
+    //         "ISQT": "0",
+    //         "DTQTS": "00:00",
+    //         "DTQTE": "00:00"
+    //       }
+    //     ]
+    return result.data['#result-set-2'];
   } catch (error) {
     console.error('findInfo error:', error);
     throw error;
@@ -240,6 +251,7 @@ export const findTeacher = async () => {
     });
 
     console.log('findTeacher result:', result);
+
     return result.data['#result-set-1'];
   } catch (error) {
     console.error('findTeacher error:', error);
@@ -248,44 +260,71 @@ export const findTeacher = async () => {
 };
 
 /**
- * 同时调用三个接口，全部成功后执行setCurCoursetype逻辑
+ * 判断用户是否在等待签到
+ * @param userIdList 用户ID列表
+ * @param studentData 学生数据列表
+ * @param isqt 是否为签退状态 (1: 签退, 0: 签到)
+ * @returns 如果userIdList中任何一个用户在等待签到/签退，返回true，否则返回false
  */
-export const fetchAllAndProcessCourseType = async (
-  idtype?: string | number,
-  iddetail?: string | number,
-  vctype?: string | number,
-  vcschool?: string | number
-) => {
+export const isWaitSignUser = (userIdList: string[], studentData: any[], isqt: number): boolean => {
+  console.log("执行判断用户是否在等待签到=" + JSON.stringify(userIdList));
+
+  if (!studentData || studentData.length === 0) {
+    return false;
+  }
+
+  // 检查idList中是否存在任何一个userIdList中的用户ID
+  if (isqt === 1) {
+    // 签退逻辑：ISEND != 1
+    const idList = studentData.filter((item) => {
+      return item.ISEND != 1;
+    }).map((e) => e.ID);
+
+    console.log("执行判断用户是否在等待签到2=" + JSON.stringify(userIdList));
+    // 检查idList中是否存在userIdList中的任何一个ID
+    return userIdList.some(userId => idList.includes(userId));
+  } else {
+    // 签到逻辑：IDSTATUS == 0 || IDSTATUS == 3
+    const idList = studentData.filter((item) => {
+      return (item.IDSTATUS == 0 || item.IDSTATUS == 3);
+    }).map((e) => e.ID);
+
+    console.log("执行判断用户是否在等待签到3=" + JSON.stringify(userIdList));
+    // 检查idList中是否存在userIdList中的任何一个ID
+    return userIdList.some(userId => idList.includes(userId));
+  }
+};
+
+/**
+ * 并行调用 findInfo、findStu、findTeacher 三个接口，并处理结果
+ */
+export const fetchAllAndProcessCourseType = async () => {
   try {
-    console.log('fetchAllAndProcessCourseType: 开始并行调用三个接口');
+    console.log('fetchAllAndProcessCourseType: 开始执行');
+
     // 并行调用三个接口
-    const [infoResult, stuResult, teacherResult] = await Promise.all([
+    const [findInfoResult, findStuResult, findTeacherResult] = await Promise.all([
       findInfo(),
-      findStu(idtype, iddetail, vctype, vcschool),
+      findStu(4,'','',''),
       findTeacher()
     ]);
 
-    console.log('fetchAllAndProcessCourseType: 三个接口调用完成');
-    console.log('infoResult:', infoResult);
-    console.log('stuResult:', stuResult);
-    console.log('teacherResult:', teacherResult);
+    console.log('fetchAllAndProcessCourseType: 接口调用完成');
 
-    // 检查是否所有接口都成功返回了数据
-    if (infoResult !== null && stuResult !== null && teacherResult !== null) {
-      console.log('fetchAllAndProcessCourseType: 所有接口调用成功，返回结果');
-      // 在获取数据后处理课程类型
-      processCourseType(infoResult);
-      return {
-        infoData: infoResult,
-        stuData: stuResult,
-        teacherData: teacherResult
-      };
-    } else {
-      console.error('fetchAllAndProcessCourseType: 某个接口调用失败');
-      throw new Error('一个或多个接口调用失败');
-    }
+    // 处理课程类型
+    const courseType = processCourseType(findInfoResult || []);
+
+    console.log('fetchAllAndProcessCourseType: 成功返回结果');
+
+    return {
+      findInfo: findInfoResult,
+      findStu: findStuResult,
+      findTeacher: findTeacherResult,
+      courseType
+    };
   } catch (error) {
-    console.error('fetchAllAndProcessCourseType error:', error);
+    console.error('fetchAllAndProcessCourseType: 接口调用失败', error);
     throw error;
   }
 };
+

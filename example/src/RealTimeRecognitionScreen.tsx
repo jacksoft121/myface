@@ -239,31 +239,173 @@ export default function RealTimeRecognitionScreen() {
     frame: `0x0`,
   });
 
-  // 添加课程人数统计状态
+// 添加全局数据状态
+  const [courseData, setCourseData] = useState<any>(null); // 全局存储课程数据
+  const [studentData, setStudentData] = useState<any[]>([]); // 全局存储学生数据
+  const [teacherData, setTeacherData] = useState<any[]>([]); // 全局存储教师数据
+  const [isDataLoaded, setIsDataLoaded] = useState(false); // 数据是否已加载
+
+// 添加课程人数统计状态
   const [qisum0, setQisum0] = useState(0); // 未签到人数
   const [qisum1, setQisum1] = useState(0); // 已签到人数
-// 获取课程信息和人数统计
-  useEffect(() => {
-    const loadCourseData = async () => {
-      try {
-        const result = await fetchAllAndProcessCourseType(4,'','','');
-        if (result) {
-          // 计算qisum0（未签到人数）和qisum1（已签到人数）
-          const totalStudents = result.stuData?.length || 0;
-          const checkedInStudents = result.teacherData?.filter(student =>
-            student.qdzt === '1' || student.qdzt === 1
-          ).length || 0;
+  const [isqt, setIsqt] = useState(0); // 是否为签退状态 (1: 签退, 0: 签到)
+  const [typetext, setTypetext] = useState(''); // 课程类型文本
+  const [faceText, setFaceText] = useState(''); // 人脸识别文本
 
-          setQisum0(totalStudents - checkedInStudents); // 未签到人数
-          setQisum1(checkedInStudents); // 已签到人数
+// 初始化加载课程数据（只在打开时调用一次）
+  useEffect(() => {
+    const loadInitialCourseData = async () => {
+      try {
+        const result = await fetchAllAndProcessCourseType();
+        if (result) {
+          setCourseData(result.findInfo);
+          setStudentData(result.findStu || []);
+          setTeacherData(result.findTeacher || []);
+          setIsDataLoaded(true);
+          console.log('初始化课程数据加载完成');
         }
       } catch (error) {
-        console.error('获取课程数据失败:', error);
+        console.error('初始化获取课程数据失败:', error);
       }
     };
 
-    loadCourseData();
+    loadInitialCourseData();
   }, []);
+
+// 定时更新课程类型判断和人数统计（不调用fetchAllAndProcessCourseType）
+  useEffect(() => {
+    const updateCourseStats = () => {
+      if (!isDataLoaded || !courseData) return;
+
+      const qdList = courseData || [];
+
+      // 参考setCurCoursetype方法实现课程类型判断
+      const currentDate = new Date();
+      const currentHours = currentDate.getHours().toString().padStart(2, '0');
+      const currentMinutes = currentDate.getMinutes().toString().padStart(2, '0');
+      const currentTime = `${currentHours}:${currentMinutes}`;
+
+      let v_idsigntype = 0;
+      let v_vcname = '';
+      let isqd = 0;
+      let isqt = 0;
+      console.log("qdList:", qdList);
+      // 查找签到时间段
+      const qdListFiltered = qdList.filter((item: any) => {
+        return item.ISQD == '1' && currentTime >= item.DTQDS && currentTime <= item.DTQDE;
+      }) || [];
+
+      if (qdListFiltered.length === 1) {
+        isqd = 1;
+        v_idsigntype = qdListFiltered[0].ID;
+        v_vcname = qdListFiltered[0].VCNAME;
+      }
+
+      // 查找签退时间段
+      const qtListFiltered = qdList.filter((item: any) => {
+        return item.ISQT == '1' && currentTime >= item.DTQTS && currentTime <= item.DTQTE;
+      }) || [];
+
+      if (qtListFiltered.length === 1) {
+        isqt = 1;
+        v_idsigntype = '100' + qtListFiltered[0].ID;
+        v_vcname = qtListFiltered[0].VCNAME;
+      }
+
+      // 设置课程类型状态
+      setIsqt(isqt);
+
+      if (v_idsigntype === 0) {
+        setTypetext('托管刷脸：未在刷脸时间段');
+        setFaceText('未在刷脸时间段');
+      } else {
+        setTypetext('托管刷脸：' + v_vcname + (isqt === 1 ? '签退' : '签到'));
+        setFaceText(v_vcname + (isqt === 1 ? '签退' : '签到'));
+      }
+      // 计算qisum0（未签到人数）和qisum1（已签到人数）
+      const totalStudents = studentData.length || 0;
+
+      // 根据签到/签退状态计算已签到人数
+      let checkedInStudents = 0;
+      if (isqt === 1) {
+        // 签退逻辑：ISEND != 1 表示未签退
+        checkedInStudents = studentData.filter((student: any) =>
+          student.ISEND != 1
+        ).length || 0;
+      } else {
+        // 签到逻辑：IDSTATUS == 1 || IDSTATUS == 2 表示已签到
+        checkedInStudents = studentData.filter((student: any) =>
+          student.IDSTATUS == 1 || student.IDSTATUS == 2
+        ).length || 0;
+      }
+
+      setQisum0(totalStudents - checkedInStudents); // 未签到人数
+      setQisum1(checkedInStudents); // 已签到人数
+
+      console.log('课程类型判断结果:', { isqt, typetext, faceText, qisum0, qisum1 });
+    };
+
+    // 立即执行一次
+    updateCourseStats();
+
+    // 设置定时器，每钞钟更新一次课程类型判断
+    const interval = setInterval(updateCourseStats,  1000 * 60);
+
+    return () => clearInterval(interval);
+  }, [isDataLoaded, courseData, studentData]);
+
+// 更新学生签到状态的函数（在刷脸识别成功后调用）
+  const updateStudentStatus = (userId: string, newStatus: number) => {
+    setStudentData(prevStudentData => {
+      const updatedData = prevStudentData.map(student => {
+        if (student.ID === userId) {
+          return { ...student, IDSTATUS: newStatus };
+        }
+        return student;
+      });
+      console.log(`更新学生 ${userId} 的IDSTATUS为 ${newStatus}`);
+      return updatedData;
+    });
+  };
+
+// 记录上一次播报的时间，避免疯狂重复
+  const lastSpeechTime = useRef(0);
+
+  // 在JS线程中更新学生状态的函数
+  const updateStudentStatusJS = useMemo(() => {
+    return Worklets.createRunOnJS((faceId: number) => {
+      // 将faceId转换为userId（这里需要根据您的业务逻辑调整）
+      const userId = faceId.toString();
+      // 更新学生状态为已签到（IDSTATUS=1）
+      updateStudentStatus(userId, 1);
+    });
+  }, [updateStudentStatus]);
+
+// 修改playSpeechJS函数，在播放语音的同时更新学生状态
+  const playSpeechJS = useMemo(() => {
+    return Worklets.createRunOnJS((faceId: number) => {
+      const now = Date.now();
+      // 设置冷却时间：例如 3000 毫秒 (3秒) 内播报过就不再重播
+      if (now - lastSpeechTime.current < 3000) {
+        return;
+      }
+
+      lastSpeechTime.current = now;
+
+      try {
+        console.log('--- JS线程: 准备播放语音 ---');
+        // 调用你的业务播报函数
+        speechVcName(0);
+
+        // 同时更新学生状态
+        const userId = faceId.toString();
+        updateStudentStatus(userId, 1);
+      } catch (e) {
+        console.error('语音播放失败:', e);
+      }
+    });
+  }, [updateStudentStatus]);
+
   // Session 单例
   const sessionRef = useRef<any>(null);
 
@@ -528,28 +670,6 @@ export default function RealTimeRecognitionScreen() {
     return { w, h };
   }
 
-// 记录上一次播报的时间，避免疯狂重复
-  const lastSpeechTime = useRef(0);
-
-  const playSpeechJS = useMemo(() => {
-    return Worklets.createRunOnJS((faceId: number) => {
-      const now = Date.now();
-      // 设置冷却时间：例如 3000 毫秒 (3秒) 内播报过就不再重播
-      if (now - lastSpeechTime.current < 3000) {
-        return;
-      }
-
-      lastSpeechTime.current = now;
-
-      try {
-        console.log('--- JS线程: 准备播放语音 ---');
-        // 调用你的业务播报函数
-        speechVcName(0);
-      } catch (e) {
-        console.error('语音播放失败:', e);
-      }
-    });
-  }, []);
 
   const frameProcessor = useFrameProcessor(
     (frame: Frame) => {
@@ -957,8 +1077,11 @@ export default function RealTimeRecognitionScreen() {
 
           {/* 右侧 3/5：姓名展示 */}
           <View style={styles.nameRight}>
-            <Text style={styles.labelTitle}>识别结果</Text>
-            <Text style={styles.resultName}>{lastCapture.name || '---'}</Text>
+            {/* 添加课程信息显示 */}
+            <View style={styles.courseInfo}>
+              <Text style={styles.faceText}>{faceText || '未在刷脸时间段'}</Text>
+              <Text style={styles.typeText}>{typetext || '托管刷脸：未在刷脸时间段'}</Text>
+            </View>
           </View>
 
         </View>
@@ -1107,18 +1230,25 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  placeholderText: {
-    color: '#666',
-    fontSize: 12,
-  },
-  labelTitle: {
-    color: '#999',
-    fontSize: 14,
-    marginBottom: 4,
-  },
+
   resultName: {
     color: '#00ff00',
     fontSize: 32,
     fontWeight: 'bold',
+  },
+  courseInfo: {
+    marginTop: 10,
+  },
+  faceText: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  typeText: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 4,
   },
 });
