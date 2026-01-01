@@ -28,7 +28,7 @@ import {
 } from 'react-native-nitro-inspire-face';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { getCurrentUser } from './comm/User';
+import {getCurrentUser, setCurrentUser, type User} from './comm/User';
 import { recognitionStorage } from './comm/GlobalStorage';
 import {
   insertName,
@@ -259,9 +259,22 @@ const SettingFace = ({ route }: any) => {
         const campuses: Campus[] = res.data[dataKey];
         setCampusList(campuses);
         const defaultCampus =
-          campuses.find((c) => c.ID === currentUser.ID) || campuses[0];
+          campuses.find((c) => c.ID === currentUser.IDCAMPUS) || campuses[0];
         if (defaultCampus) {
           setSelectedCampus(defaultCampus);
+          // ✅ 关键修改点：将 defaultCampus 的 ID 和 NAME 保存到 currentUser
+          // 确保只有当 currentUser 的 campusId 和 campusName 发生变化时才更新
+          if (currentUser.campusId !== defaultCampus.ID ) {
+              const updatedUser: User = {
+                  ...currentUser,
+                  campusId: defaultCampus.ID,
+                  campusName: defaultCampus.VCNAME,
+              };
+              setCurrentUser(updatedUser); // 更新到本地存储
+              // 如果你的 currentUser 状态也在 SettingFace 组件中管理，你可能还需要更新该组件的状态
+              // 例如：setGlobalCurrentUser(updatedUser);
+              console.log('CurrentUser updated with default campus:', updatedUser);
+          }
         }
       }
     } catch (error) {

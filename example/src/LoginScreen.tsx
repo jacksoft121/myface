@@ -15,12 +15,14 @@ import { MMKV } from 'react-native-mmkv';
 import { apiLogin } from './api';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { setCurrentUser, User } from './comm/User'; // 导入 setCurrentUser 和 User 类型
 
 // 定义导航栈的参数类型
 type RootStackParamList = {
   Login: undefined;
   ArcSoftInfo: undefined;
   RegisteredFaces: undefined;
+  SettingFace: undefined; // 增加 SettingFace 路由
 };
 
 type LoginScreenNavigationProp = NativeStackNavigationProp<
@@ -36,7 +38,7 @@ const STORAGE_KEYS = {
   REMEMBER_ME: 'remember_me',
   USER_PHONE: 'user_phone',
   USER_PASSWORD: 'user_password',
-  CURRENT_USER: 'current_user',
+  // CURRENT_USER: 'current_user', // 交由 comm/User.ts 管理
 };
 
 const { width, height } = Dimensions.get('window');
@@ -68,7 +70,7 @@ const LoginScreen: React.FC = () => {
     loadSavedCredentials();
   }, []);
 
-  const processLogin = (userData: any) => {
+  const processLogin = (orgData: any) => {
     if (rememberMe) {
       storage.set(STORAGE_KEYS.REMEMBER_ME, true);
       storage.set(STORAGE_KEYS.USER_PHONE, phone);
@@ -78,7 +80,17 @@ const LoginScreen: React.FC = () => {
       storage.delete(STORAGE_KEYS.USER_PHONE);
       storage.delete(STORAGE_KEYS.USER_PASSWORD);
     }
-    storage.set(STORAGE_KEYS.CURRENT_USER, JSON.stringify(userData));
+
+    // 将选择的机构信息映射到 User 类型并保存
+    const user: User = {
+      ...orgData, // 复制所有字段
+      ID: orgData.ID, // 确保 ID 存在且类型正确
+      VCNAME: orgData.VCNAMECUST || orgData.VCNAME, // 优先使用 VCNAMECUST 作为用户名称
+      campusId: orgData.IDCAMPUS ? Number(orgData.IDCAMPUS) : undefined, // 转换为 number 类型
+      campusName: orgData.VCNAMECUST || orgData.VCNAME, // 使用 VCNAMECUST 作为校区名称
+    };
+    setCurrentUser(user); // 使用 setCurrentUser 保存用户数据
+
     // 使用导航替换当前屏幕
     navigation.replace('SettingFace');
   };
@@ -109,8 +121,9 @@ const LoginScreen: React.FC = () => {
         } else if (resultSet.length === 1) {
           processLogin(resultSet[0]);
         } else {
+          // 如果有多个机构，弹出选择框
           const options = resultSet.map((org: any) => ({
-            text: `${org.VCNAMECUST}(${org.VCPHONE})`,
+            text: `${org.VCNAMECUST}(${org.VCPHONE || org.ID})`, // 显示机构名称和手机号/ID
             onPress: () => processLogin(org),
           }));
           options.push({ text: '取消', style: 'cancel' });

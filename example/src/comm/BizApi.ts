@@ -1,5 +1,5 @@
 import { apiFind } from '../api';
-import { getCurrentUser } from './User';
+import { getCurrentUser, User } from './User'; // 导入 User 类型
 
 import Sound from 'react-native-sound';
 
@@ -8,14 +8,32 @@ Sound.setCategory('Playback');
 
 let isSpeechPlaying = false; // 播放锁
 
+/**
+ * 从 currentUser 获取公共 API 参数
+ * @param currentUser 当前用户对象
+ * @returns 包含公共 API 参数的对象
+ */
+const getCommonApiParams = (currentUser: User) => {
+  // 假设 g_vcnameprefix 可以从 IDORG 中提取，或者是一个固定值
+  // 根据你提供的 g_vcnameprefix: "szstg"，我将尝试从 IDORG 提取前缀
+  const g_vcnameprefix = currentUser.IDORG?.split('_')[0] || 'szstg';
+
+  return {
+    g_idorgmain: currentUser.IDORG || '',
+    g_idopr: currentUser.ID || '',
+    g_vcempin: currentUser.VCNAME || '',
+    g_vctoken: currentUser.token || '',
+    g_vcnameprefix: g_vcnameprefix,
+  };
+};
+
 export const speechVcName = (aID: string | number) => {
   // 如果正在播，直接跳过，避免声音堆叠
   if (isSpeechPlaying) return;
 
   let vcurlvoc = '';
   if (aID && aID !== 0 && aID !== -1) {
-    // 假设这里的 getCurrentUser 能拿到 IDORG
-    const currentUser = (global as any).currentUser;
+    const currentUser = getCurrentUser(); // 从 getCurrentUser 获取 currentUser
     if (currentUser?.IDORG) {
       vcurlvoc = `https://dlx-face.oss-cn-shanghai.aliyuncs.com/${currentUser.IDORG}/vocname/${aID}.mp3`;
     } else {
@@ -134,9 +152,12 @@ export const findInfo = async (onCourseTypeUpdate?: (courseType: any) => void) =
       return null;
     }
 
+    const commonParams = getCommonApiParams(currentUser);
+
     const result = await apiFind('szproctec', {
       procedure: 'st_pfm_config_face_se_init',
       i_idopr: currentUser.ID,
+      ...commonParams, // 合并公共参数
     });
 
     console.log('findInfo result:', result);
@@ -153,7 +174,6 @@ export const findInfo = async (onCourseTypeUpdate?: (courseType: any) => void) =
  * 对应调用存储过程: st_cou_course_student_up_se_sum
  */
 export const findStu = async (
-  campusId?: string | number,
   idtype?: string | number,
   iddetail?: string | number,
   vctype?: string | number,
@@ -167,28 +187,30 @@ export const findStu = async (
       return null;
     }
 
+    const commonParams = getCommonApiParams(currentUser);
+
     const result = await apiFind('szproctec', {
       procedure: 'st_cou_course_student_up_se_sum',
       i_idopr: currentUser.ID,
-      i_idcampus: campusId || currentUser.campusId, // 使用传入的校园ID或当前用户的校园ID
+      i_idcampus: currentUser.campusId,
       i_idtype: idtype,
       i_iddetail: iddetail,
       i_vctype: vctype,
-      i_vcschool: vcschool
+      i_vcschool: vcschool,
+      ...commonParams, // 合并公共参数
     });
 
     console.log('findStu result:', result);
 
     // 处理学生数据，去重
-    const list = result.data['#result-set-1'] || [];
-    if (list) {
+    const list = result.data['#result-set-1'] || []; // 使用 ?.data1 访问，与 dlx_video_compare.nvue 日志保持一致
+    if (list.length > 0) {
       // 为去重后赋值
       const uniqueData = Array.from(new Map(list.map((item: any) => [item.ID, item])).values());
       console.log('Unique student data:', uniqueData);
       return uniqueData;
     }
 
-    return result;
   } catch (error) {
     console.error('findStu error:', error);
     throw error;
@@ -199,7 +221,7 @@ export const findStu = async (
  * 获取教师列表
  * 对应调用存储过程: st_cou_teacher_up_se_detail2
  */
-export const findTeacher = async (campusId?: string | number) => {
+export const findTeacher = async () => {
   try {
     console.log('findTeacher: 获取教师列表');
     const currentUser = getCurrentUser();
@@ -208,10 +230,13 @@ export const findTeacher = async (campusId?: string | number) => {
       return null;
     }
 
+    const commonParams = getCommonApiParams(currentUser);
+
     const result = await apiFind('szproctec', {
       procedure: 'st_cou_teacher_up_se_detail2',
       i_idopr: currentUser.ID,
-      i_idcampus: campusId || currentUser.campusId, // 使用传入的校园ID或当前用户的校园ID
+      i_idcampus: currentUser.campusId,
+      ...commonParams, // 合并公共参数
     });
 
     console.log('findTeacher result:', result);
@@ -233,13 +258,11 @@ export const fetchAllAndProcessCourseType = async (
 ) => {
   try {
     console.log('fetchAllAndProcessCourseType: 开始并行调用三个接口');
-    const currentUser = getCurrentUser();
-    const campusId = currentUser.campusId || '';
     // 并行调用三个接口
     const [infoResult, stuResult, teacherResult] = await Promise.all([
       findInfo(),
-      findStu(campusId, idtype, iddetail, vctype, vcschool),
-      findTeacher(campusId)
+      findStu(idtype, iddetail, vctype, vcschool),
+      findTeacher()
     ]);
 
     console.log('fetchAllAndProcessCourseType: 三个接口调用完成');
